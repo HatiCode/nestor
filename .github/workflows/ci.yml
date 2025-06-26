@@ -1,0 +1,249 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ steps.changes.outputs.cli }}
+      orchestrator: ${{ steps.changes.outputs.orchestrator }}
+      processor: ${{ steps.changes.outputs.processor }}
+      shared: ${{ steps.changes.outputs.shared }}
+      docs: ${{ steps.changes.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            cli:
+              - 'cli/**'
+              - 'shared/**'
+              - 'go.work'
+              - 'go.work.sum'
+            orchestrator:
+              - 'orchestrator/**'
+              - 'shared/**'
+              - 'go.work'
+              - 'go.work.sum'
+            processor:
+              - 'processor/**'
+              - 'shared/**'
+              - 'go.work'
+              - 'go.work.sum'
+            shared:
+              - 'shared/**'
+              - 'go.work'
+              - 'go.work.sum'
+            docs:
+              - 'docs/**'
+              - '*.md'
+
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      go-version: ${{ steps.go-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get Go version from go.work
+        id: go-version
+        run: |
+          version=$(grep -E '^go [0-9.]+' go.work | awk '{print $2}')
+          echo "version=$version" >> $GITHUB_OUTPUT
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+      - name: Verify workspace
+        run: |
+          go work sync
+          go work verify
+
+  lint:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: |
+      needs.changes.outputs.cli == 'true' ||
+      needs.changes.outputs.orchestrator == 'true' ||
+      needs.changes.outputs.processor == 'true' ||
+      needs.changes.outputs.shared == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: .
+          args: --config tools/lint/.golangci.yml
+
+  test-cli:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: needs.changes.outputs.cli == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Test CLI
+        run: |
+          cd cli
+          go test -v -race -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./cli/coverage.out
+          flags: cli
+
+  test-orchestrator:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: needs.changes.outputs.orchestrator == 'true'
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Test Orchestrator
+        run: |
+          cd orchestrator
+          go test -v -race -coverprofile=coverage.out ./...
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REDIS_URL: redis://localhost:6379
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./orchestrator/coverage.out
+          flags: orchestrator
+
+  test-processor:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: needs.changes.outputs.processor == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Test Processor
+        run: |
+          cd processor
+          go test -v -race -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./processor/coverage.out
+          flags: processor
+
+  test-shared:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: needs.changes.outputs.shared == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Test Shared
+        run: |
+          cd shared
+          go test -v -race -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./shared/coverage.out
+          flags: shared
+
+  test-integration:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: |
+      needs.changes.outputs.cli == 'true' ||
+      needs.changes.outputs.orchestrator == 'true' ||
+      needs.changes.outputs.processor == 'true'
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Run integration tests
+        run: |
+          cd test/integration
+          go test -v -race ./...
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REDIS_URL: redis://localhost:6379
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: |
+      needs.changes.outputs.cli == 'true' ||
+      needs.changes.outputs.orchestrator == 'true' ||
+      needs.changes.outputs.processor == 'true'
+    strategy:
+      matrix:
+        component: [cli, orchestrator, processor]
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          - os: windows
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+      - name: Go work sync
+        run: go work sync
+      - name: Build ${{ matrix.component }}
+        run: |
+          cd ${{ matrix.component }}
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o ../dist/${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }} .
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }}*

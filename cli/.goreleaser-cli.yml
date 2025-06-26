@@ -1,0 +1,104 @@
+version: 1
+
+project_name: nestor-cli
+
+before:
+  hooks:
+    - go work sync
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: nestor-cli
+    main: .
+    binary: nestor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - "386"
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Env.CLI_VERSION }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: nestor-cli
+    name_template: "nestor-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - ../LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+
+brews:
+  - name: nestor-cli
+    tap:
+      owner: nestor
+      name: homebrew-tap
+    homepage: "https://github.com/nestor/nestor"
+    description: "Infrastructure as Code from Code annotations"
+    license: "Apache-2.0"
+    install: |
+      bin.install "nestor"
+    test: |
+      system "#{bin}/nestor version"
+
+scoop:
+  bucket:
+    owner: nestor
+    name: scoop-bucket
+  homepage: "https://github.com/nestor/nestor"
+  description: "Infrastructure as Code from Code annotations"
+  license: "Apache-2.0"
+
+nfpms:
+  - id: nestor-cli
+    package_name: nestor-cli
+    vendor: Nestor
+    homepage: "https://github.com/nestor/nestor"
+    description: "Infrastructure as Code from Code annotations"
+    maintainer: "Nestor Team <team@nestor.dev>"
+    license: "Apache-2.0"
+    formats:
+      - deb
+      - rpm
+      - apk

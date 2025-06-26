@@ -1,0 +1,83 @@
+name: Release Processor
+
+on:
+  push:
+    tags:
+      - "processor/v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release-processor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          tag=${GITHUB_REF#refs/tags/processor/}
+          echo "version=${tag}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: go.work
+
+      - name: Go work sync
+        run: go work sync
+
+      - name: Run tests
+        run: |
+          cd processor
+          go test -v ./...
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: processor/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/processor:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}/processor:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMPONENT=processor
+
+      - name: Build serverless packages
+        run: |
+          cd processor
+          # Build for AWS Lambda
+          GOOS=linux GOARCH=amd64 go build -tags lambda -o bootstrap .
+          zip lambda-deployment.zip bootstrap
+
+          # Build for Google Cloud Functions
+          GOOS=linux GOARCH=amd64 go build -tags gcf -o function .
+          zip gcf-deployment.zip function
+
+          # Build for Azure Functions
+          GOOS=linux GOARCH=amd64 go build -tags azure -o handler .
+          zip azure-deployment.zip handler
+
+      - name: Create release
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+          workdir: processor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROCESSOR_VERSION: ${{ steps.version.outputs.version }}

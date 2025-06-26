@@ -1,0 +1,68 @@
+version: 1
+
+project_name: nestor-orchestrator
+
+before:
+  hooks:
+    - go work sync
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: nestor-orchestrator
+    main: .
+    binary: orchestrator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Env.ORCHESTRATOR_VERSION }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: nestor-orchestrator
+    name_template: "nestor-orchestrator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - ../LICENSE
+      - README.md
+      - configs/example.yaml
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/nestor/nestor/orchestrator:{{ .Version }}"
+      - "ghcr.io/nestor/nestor/orchestrator:latest"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"

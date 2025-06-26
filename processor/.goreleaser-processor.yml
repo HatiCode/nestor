@@ -1,0 +1,93 @@
+version: 1
+
+project_name: nestor-processor
+
+before:
+  hooks:
+    - go work sync
+    - go mod tidy
+    - go test ./...
+
+builds:
+  # Standard binary builds
+  - id: nestor-processor
+    main: .
+    binary: processor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Env.PROCESSOR_VERSION }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+      - -X main.builtBy=goreleaser
+
+  # AWS Lambda build
+  - id: nestor-processor-lambda
+    main: .
+    binary: bootstrap
+    env:
+      - CGO_ENABLED=0
+      - GOOS=linux
+      - GOARCH=amd64
+    tags:
+      - lambda
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Env.PROCESSOR_VERSION }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: nestor-processor
+    name_template: "nestor-processor_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - ../LICENSE
+      - README.md
+      - configs/example.yaml
+
+  - id: lambda-deployment
+    builds:
+      - nestor-processor-lambda
+    name_template: "nestor-processor-lambda_{{ .Version }}"
+    format: zip
+    files:
+      - README.md
+      - configs/lambda.yaml
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/nestor/nestor/processor:{{ .Version }}"
+      - "ghcr.io/nestor/nestor/processor:latest"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
