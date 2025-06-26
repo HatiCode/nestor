@@ -243,7 +243,7 @@ jobs:
           cd ${{ matrix.component }}
           GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o ../dist/${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }} .
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/${{ matrix.component }}-${{ matrix.os }}-${{ matrix.arch }}*
