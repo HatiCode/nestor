@@ -14,6 +14,10 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Go version management - SINGLE SOURCE OF TRUTH
+GO_VERSION="1.24.4"
+MIN_GO_VERSION="1.24"
+
 # Component directories
 CLI_DIR="$ROOT_DIR/cli"
 ORCHESTRATOR_DIR="$ROOT_DIR/orchestrator"
@@ -48,18 +52,32 @@ check_dependencies() {
 
     # Check Go
     if ! command -v go >/dev/null 2>&1; then
-        log_error "Go is not installed. Please install Go 1.24+ from https://golang.org/dl/"
+        log_error "Go is not installed. Please install Go ${MIN_GO_VERSION}+ from https://golang.org/dl/"
         exit 1
     fi
 
-    # Check Go version
-    go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
-    required_version="go1.24"
-    if [[ "$(printf '%s\n' "$required_version" "$go_version" | sort -V | head -n1)" != "$required_version" ]]; then
-        log_error "Go version $go_version is too old. Please upgrade to Go 1.24+"
+    # Check Go version more precisely
+    go_version_output=$(go version)
+    go_version=$(echo "$go_version_output" | grep -oE 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+
+    if [[ -z "$go_version" ]]; then
+        log_error "Could not determine Go version from: $go_version_output"
         exit 1
     fi
-    log_success "Go version: $go_version"
+
+    # Version comparison function
+    version_compare() {
+        printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1
+    }
+
+    min_version="go${MIN_GO_VERSION}"
+    if [[ "$(version_compare "$min_version" "$go_version")" != "$min_version" ]]; then
+        log_error "Go version $go_version is too old. Please upgrade to Go ${MIN_GO_VERSION}+"
+        log_info "Current: $go_version, Required: ${MIN_GO_VERSION}+"
+        exit 1
+    fi
+
+    log_success "Go version: $go_version (required: ${MIN_GO_VERSION}+)"
 
     # Check Git
     if ! command -v git >/dev/null 2>&1; then
@@ -86,13 +104,20 @@ check_dependencies() {
 install_dev_tools() {
     log_info "Installing development tools..."
 
+    # Ensure Go bin directory is in PATH
+    go_bin_dir=$(go env GOPATH)/bin
+    if [[ ! "$PATH" == *"$go_bin_dir"* ]]; then
+        log_warning "Go bin directory not in PATH. Adding to current session..."
+        export PATH="$PATH:$go_bin_dir"
+    fi
+
     # Install golangci-lint
     if ! command -v golangci-lint >/dev/null 2>&1; then
         log_info "Installing golangci-lint..."
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" latest
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$go_bin_dir" latest
         log_success "golangci-lint installed"
     else
-        log_success "golangci-lint already installed: $(golangci-lint --version)"
+        log_success "golangci-lint already installed: $(golangci-lint --version | head -1)"
     fi
 
     # Install gosec
@@ -122,18 +147,24 @@ install_dev_tools() {
         log_success "trivy already installed"
     fi
 
-    # Install useful tools
+    # Install useful development tools
     local tools=(
-        "github.com/air-verse/air@latest"              # Live reload for development
-        "github.com/golangci/misspell/cmd/misspell@latest" # Spell checker
-        "github.com/client9/misspell/cmd/misspell@latest"  # Alternative spell checker
+        "github.com/air-verse/air@latest"                          # Live reload for development
+        "github.com/client9/misspell/cmd/misspell@latest"          # Spell checker
+        "github.com/wadey/gocovmerge@latest"                       # Coverage merging
     )
 
     for tool in "${tools[@]}"; do
         tool_name=$(basename "$(echo "$tool" | cut -d'@' -f1)")
         if ! command -v "$tool_name" >/dev/null 2>&1; then
             log_info "Installing $tool_name..."
-            go install "$tool" || log_warning "Failed to install $tool_name"
+            if go install "$tool"; then
+                log_success "$tool_name installed"
+            else
+                log_warning "Failed to install $tool_name"
+            fi
+        else
+            log_success "$tool_name already installed"
         fi
     done
 }
@@ -168,20 +199,36 @@ setup_go_workspace() {
 
     cd "$ROOT_DIR"
 
-    # Initialize or sync workspace
-    if [[ ! -f "go.work" ]]; then
-        log_info "Initializing Go workspace..."
-        go work init "$CLI_DIR" "$ORCHESTRATOR_DIR" "$PROCESSOR_DIR" "$SHARED_DIR"
-        log_success "Go workspace initialized"
-    else
-        log_info "Syncing Go workspace..."
-        go work sync
-        log_success "Go workspace synchronized"
-    fi
+    # Create or update workspace with proper Go version
+    log_info "Creating/updating Go workspace with Go ${GO_VERSION}..."
+    cat > go.work << EOF
+go ${GO_VERSION}
 
-    # Verify workspace
+use (
+	./cli
+	./orchestrator
+	./processor
+	./shared
+)
+
+// Replace directives for local development
+// Uncomment these when working with local versions of dependencies
+// replace (
+//	github.com/HatiCode/nestor/shared => ./shared
+// )
+EOF
+
+    # Sync and verify workspace
+    log_info "Syncing Go workspace..."
+    go work sync
     go work verify
-    log_success "Go workspace verified"
+    log_success "Go workspace initialized and verified"
+
+    # Show workspace info
+    log_info "Workspace information:"
+    go version
+    echo "Modules in workspace:"
+    go list -m all | head -5
 }
 
 create_component_structure() {
@@ -225,6 +272,12 @@ create_config_files() {
 run:
   timeout: 5m
   modules-download-mode: readonly
+  allow-parallel-runners: true
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
 
 linters:
   enable:
@@ -246,6 +299,10 @@ linters:
     - gocritic
     - gocyclo
     - dupl
+    - goconst
+    - gofumpt
+    - goprintffuncname
+    - nolintlint
 
 linters-settings:
   gci:
@@ -254,7 +311,7 @@ linters-settings:
       - default
       - prefix(github.com/HatiCode/nestor)
   revive:
-    min-confidence: 0
+    min-confidence: 0.8
   gocritic:
     enabled-tags:
       - diagnostic
@@ -264,16 +321,29 @@ linters-settings:
       - style
   gocyclo:
     min-complexity: 15
+  goconst:
+    min-len: 2
+    min-occurrences: 3
 
 issues:
+  exclude-use-default: false
   exclude-rules:
     - path: _test\.go
       linters:
         - gosec
         - dupl
+        - goconst
     - path: main\.go
       linters:
         - gocyclo
+    - text: "weak cryptographic primitive"
+      linters:
+        - gosec
+    - text: "should not use dot imports"
+      linters:
+        - revive
+  max-issues-per-linter: 0
+  max-same-issues: 0
 EOF
         log_success "Created golangci-lint configuration"
     fi
@@ -285,7 +355,7 @@ version: '3.8'
 
 services:
   dynamodb:
-    image: amazon/dynamodb-local:latest
+    image: amazon/dynamodb-local:2.0.0
     container_name: nestor-dynamodb
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-optimizeDbBeforeStartup"]
     ports:
@@ -293,6 +363,11 @@ services:
     volumes:
       - dynamodb-data:/home/dynamodblocal/data
     working_dir: /home/dynamodblocal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -301,6 +376,11 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   orchestrator:
     build:
@@ -312,9 +392,12 @@ services:
     environment:
       - DYNAMODB_ENDPOINT=http://dynamodb:8000
       - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
     depends_on:
-      - dynamodb
-      - redis
+      dynamodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./orchestrator/configs:/app/configs
 
@@ -325,6 +408,57 @@ EOF
         log_success "Created docker-compose.yml"
     fi
 
+    # Air configuration for live reload
+    if [[ ! -f "$ROOT_DIR/.air.toml" ]]; then
+        cat > "$ROOT_DIR/.air.toml" << 'EOF'
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  args_bin = []
+  bin = "./tmp/main"
+  cmd = "go build -o ./tmp/main ./orchestrator"
+  delay = 0
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "dist", "coverage", "logs"]
+  exclude_file = []
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = false
+  follow_symlink = false
+  full_bin = ""
+  include_dir = []
+  include_ext = ["go", "tpl", "tmpl", "html", "yaml", "yml"]
+  include_file = []
+  kill_delay = "0s"
+  log = "build-errors.log"
+  poll = false
+  poll_interval = 0
+  rerun = false
+  rerun_delay = 500
+  send_interrupt = false
+  stop_on_root = false
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = false
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true
+EOF
+        log_success "Created .air.toml configuration"
+    fi
+
     # Basic .env template
     if [[ ! -f "$ROOT_DIR/.env.example" ]]; then
         cat > "$ROOT_DIR/.env.example" << 'EOF'
@@ -333,6 +467,11 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 REDIS_URL=redis://localhost:6379
 LOG_LEVEL=debug
 GITHUB_TOKEN=your_github_token_here
+
+# Component-specific settings
+ORCHESTRATOR_PORT=8080
+PROCESSOR_WORKERS=4
+CLI_CONFIG_DIR=~/.nestor
 EOF
         log_success "Created .env.example"
     fi
@@ -348,7 +487,7 @@ create_go_modules() {
         log_success "Created CLI go.mod"
     fi
 
-    # Orchestrator module (already exists based on provided files)
+    # Orchestrator module (update if exists or create)
     if [[ ! -f "$ORCHESTRATOR_DIR/go.mod" ]]; then
         cd "$ORCHESTRATOR_DIR"
         go mod init github.com/HatiCode/nestor/orchestrator
@@ -370,6 +509,25 @@ create_go_modules() {
     fi
 
     cd "$ROOT_DIR"
+
+    # Ensure all modules use the same Go version
+    for dir in "$CLI_DIR" "$ORCHESTRATOR_DIR" "$PROCESSOR_DIR" "$SHARED_DIR"; do
+        if [[ -f "$dir/go.mod" ]]; then
+            log_info "Updating Go version in $dir/go.mod..."
+            cd "$dir"
+
+            # Update go directive in go.mod if it exists
+            if grep -q "^go " go.mod; then
+                sed -i.bak "s/^go .*/go ${GO_VERSION}/" go.mod && rm go.mod.bak
+            else
+                # Add go directive if it doesn't exist
+                echo -e "\ngo ${GO_VERSION}" >> go.mod
+            fi
+
+            go mod tidy
+            cd "$ROOT_DIR"
+        fi
+    done
 }
 
 setup_git_hooks() {
@@ -381,18 +539,27 @@ setup_git_hooks() {
 #!/bin/bash
 set -e
 
-echo "Running pre-commit checks..."
+echo "🔍 Running pre-commit checks..."
+
+# Check if we're in the right directory
+if [[ ! -f "Makefile" ]]; then
+    echo "❌ Not in repository root directory"
+    exit 1
+fi
 
 # Run formatting
+echo "📝 Formatting code..."
 make fmt
 
 # Run linting
+echo "🔍 Running linters..."
 make lint
 
 # Run tests
+echo "🧪 Running tests..."
 make test
 
-echo "Pre-commit checks passed!"
+echo "✅ Pre-commit checks passed!"
 EOF
         chmod +x "$ROOT_DIR/.git/hooks/pre-commit"
         log_success "Created pre-commit hook"
@@ -406,12 +573,17 @@ EOF
 commit_regex='^(feat|fix|docs|style|refactor|test|chore|ci|perf|build)(\(.+\))?: .{1,50}'
 
 if ! grep -qE "$commit_regex" "$1"; then
-    echo "Invalid commit message format!"
-    echo "Format: type(scope): description"
-    echo "Types: feat, fix, docs, style, refactor, test, chore, ci, perf, build"
-    echo "Example: feat(cli): add new generate command"
+    echo "❌ Invalid commit message format!"
+    echo ""
+    echo "📋 Format: type(scope): description"
+    echo "🏷️  Types: feat, fix, docs, style, refactor, test, chore, ci, perf, build"
+    echo "📝 Example: feat(cli): add new generate command"
+    echo ""
+    echo "Your message: $(head -n1 "$1")"
     exit 1
 fi
+
+echo "✅ Commit message format is valid"
 EOF
         chmod +x "$ROOT_DIR/.git/hooks/commit-msg"
         log_success "Created commit-msg hook"
@@ -430,19 +602,32 @@ set -euo pipefail
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 components=("cli" "orchestrator" "processor" "shared")
+
+echo -e "${CYAN}📦 Release Status Overview${NC}"
+echo "=========================="
 
 for component in "${components[@]}"; do
     latest_tag=$(git tag -l "${component}/v*" | sort -V | tail -1 || echo "")
     if [[ -n "$latest_tag" ]]; then
         version=${latest_tag#${component}/}
-        echo -e "${GREEN}✅${NC} ${component}: ${version}"
+        tag_date=$(git log -1 --format=%ai "$latest_tag")
+        echo -e "${GREEN}✅${NC} ${component}: ${version} (${tag_date})"
     else
         echo -e "${YELLOW}⚠️${NC}  ${component}: No releases yet"
     fi
 done
+
+echo ""
+echo -e "${CYAN}🔗 Quick Commands${NC}"
+echo "=================="
+echo "Release CLI:          make release-cli"
+echo "Release Orchestrator: make release-orchestrator"
+echo "Release Processor:    make release-processor"
+echo "Release Shared:       make release-shared"
 EOF
     chmod +x "$ROOT_DIR/scripts/release-status.sh"
 
@@ -454,29 +639,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "Installing Git hooks..."
+echo "🪝 Installing Git hooks..."
 
 # Copy hooks to .git/hooks
 if [[ -d "$ROOT_DIR/.git/hooks" ]]; then
-    # Enable pre-commit hook
-    if [[ ! -f "$ROOT_DIR/.git/hooks/pre-commit" ]]; then
-        cp "$ROOT_DIR/scripts/pre-commit" "$ROOT_DIR/.git/hooks/pre-commit"
-        chmod +x "$ROOT_DIR/.git/hooks/pre-commit"
-        echo "✅ Pre-commit hook installed"
-    fi
+    # Source the setup script to get hook creation functions
+    source "$SCRIPT_DIR/setup.sh"
 
-    # Enable commit-msg hook
-    if [[ ! -f "$ROOT_DIR/.git/hooks/commit-msg" ]]; then
-        cp "$ROOT_DIR/scripts/commit-msg" "$ROOT_DIR/.git/hooks/commit-msg"
-        chmod +x "$ROOT_DIR/.git/hooks/commit-msg"
-        echo "✅ Commit message hook installed"
-    fi
+    # Call the hook setup function
+    setup_git_hooks
+
+    echo "🎉 Git hooks installed successfully!"
 else
     echo "❌ Not a Git repository or .git/hooks directory not found"
     exit 1
 fi
-
-echo "🎉 Git hooks installed successfully!"
 EOF
     chmod +x "$ROOT_DIR/scripts/install-hooks.sh"
 
@@ -494,47 +671,200 @@ run_initial_setup() {
     # Tidy modules
     for dir in "$CLI_DIR" "$ORCHESTRATOR_DIR" "$PROCESSOR_DIR" "$SHARED_DIR"; do
         if [[ -f "$dir/go.mod" ]]; then
+            log_info "Tidying module in $dir..."
             cd "$dir"
             go mod tidy
             cd "$ROOT_DIR"
         fi
     done
 
-    # Create .gitignore additions if needed
+    # Update .gitignore if needed
     if ! grep -q "dist/" "$ROOT_DIR/.gitignore" 2>/dev/null; then
-        echo -e "\n# Build artifacts\ndist/\ncoverage/\nlogs/" >> "$ROOT_DIR/.gitignore"
+        cat >> "$ROOT_DIR/.gitignore" << 'EOF'
+
+# Build artifacts
+dist/
+coverage/
+logs/
+tmp/
+
+# Development
+.env
+.air.toml.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+EOF
         log_success "Updated .gitignore"
     fi
 
+    # Create initial integration test if it doesn't exist
+    if [[ ! -f "$ROOT_DIR/test/integration/basic_test.go" ]]; then
+        mkdir -p "$ROOT_DIR/test/integration"
+        cat > "$ROOT_DIR/test/integration/basic_test.go" << 'EOF'
+package integration
+
+import (
+	"testing"
+)
+
+func TestBasicIntegration(t *testing.T) {
+	t.Log("Basic integration test placeholder")
+	// TODO: Implement actual integration tests
+	// This ensures the integration test directory is not empty
+}
+EOF
+        log_success "Created basic integration test"
+    fi
+
     log_success "Initial setup completed"
+}
+
+create_minimal_main_files() {
+    log_info "Creating minimal main.go files for components..."
+
+    # CLI main.go
+    if [[ ! -f "$CLI_DIR/main.go" ]]; then
+        cat > "$CLI_DIR/main.go" << 'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+	builtBy = "unknown"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Printf("nestor-cli %s\ncommit: %s\nbuilt at: %s\nbuilt by: %s\n", version, commit, date, builtBy)
+		return
+	}
+
+	fmt.Println("🏗️  Nestor CLI - Infrastructure as Code from Code Annotations")
+	fmt.Println("Usage: nestor [command]")
+	fmt.Println("Commands will be implemented in future versions.")
+}
+EOF
+        log_success "Created CLI main.go"
+    fi
+
+    # Orchestrator main.go
+    if [[ ! -f "$ORCHESTRATOR_DIR/main.go" ]]; then
+        cat > "$ORCHESTRATOR_DIR/main.go" << 'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+	builtBy = "unknown"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Printf("nestor-orchestrator %s\ncommit: %s\nbuilt at: %s\nbuilt by: %s\n", version, commit, date, builtBy)
+		return
+	}
+
+	fmt.Println("🎼 Nestor Orchestrator - Central Coordination Hub")
+	fmt.Println("Usage: orchestrator [command]")
+	fmt.Println("Server will be implemented in future versions.")
+}
+EOF
+        log_success "Created Orchestrator main.go"
+    fi
+
+    # Processor main.go
+    if [[ ! -f "$PROCESSOR_DIR/main.go" ]]; then
+        cat > "$PROCESSOR_DIR/main.go" << 'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+	builtBy = "unknown"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Printf("nestor-processor %s\ncommit: %s\nbuilt at: %s\nbuilt by: %s\n", version, commit, date, builtBy)
+		return
+	}
+
+	fmt.Println("⚙️  Nestor Processor - Code Analysis and Infrastructure Generation")
+	fmt.Println("Usage: processor [command]")
+	fmt.Println("Processor will be implemented in future versions.")
+}
+EOF
+        log_success "Created Processor main.go"
+    fi
 }
 
 print_next_steps() {
     echo
     echo -e "${CYAN}🎉 Nestor development environment setup completed!${NC}"
     echo
-    echo -e "${YELLOW}Next steps:${NC}"
+    echo -e "${YELLOW}📋 Next steps:${NC}"
     echo "1. Run 'make check' to verify everything is working"
     echo "2. Run 'make build' to build all components"
     echo "3. Run 'make docker-up' to start the development environment"
     echo "4. Check out the documentation in docs/"
     echo
-    echo -e "${YELLOW}Useful commands:${NC}"
-    echo "  make help          - Show all available commands"
+    echo -e "${YELLOW}🛠️  Useful commands:${NC}"
+    echo "  make help             - Show all available commands"
+    echo "  make info             - Show environment information"
     echo "  make dev-orchestrator - Run orchestrator in development mode"
-    echo "  make test          - Run all tests"
-    echo "  make lint          - Run linters"
+    echo "  make test             - Run all tests"
+    echo "  make lint             - Run linters"
+    echo "  make watch            - Watch for changes and run tests"
     echo
-    echo -e "${YELLOW}Development tools installed:${NC}"
-    echo "  golangci-lint - Code linting"
-    echo "  gosec         - Security scanning"
-    echo "  goreleaser    - Release automation"
-    echo "  trivy         - Vulnerability scanning"
+    echo -e "${YELLOW}🔧 Development tools installed:${NC}"
+    echo "  golangci-lint - Code linting and static analysis"
+    echo "  gosec         - Security vulnerability scanning"
+    echo "  goreleaser    - Release automation and cross-compilation"
+    echo "  trivy         - Vulnerability scanner for dependencies"
+    echo "  air           - Live reload for development"
+    echo
+    echo -e "${YELLOW}🏗️  Architecture Summary:${NC}"
+    echo "  CLI           - Command-line interface for developers"
+    echo "  Orchestrator  - Central coordination hub (DynamoDB + Redis)"
+    echo "  Processor     - Code analysis and infrastructure generation"
+    echo "  Shared        - Common libraries and utilities"
+    echo
+    echo -e "${YELLOW}📖 Documentation:${NC}"
+    echo "  README.md              - Project overview"
+    echo "  docs/                  - Detailed documentation"
+    echo "  Makefile               - All available commands"
+    echo "  .env.example           - Environment variables template"
+    echo
+    echo -e "${GREEN}✨ Ready to start developing! Happy coding! 🚀${NC}"
     echo
 }
 
 main() {
     echo -e "${CYAN}🚀 Setting up Nestor development environment...${NC}"
+    echo -e "${BLUE}Go Version: ${GO_VERSION}${NC}"
     echo
 
     check_dependencies
@@ -544,12 +874,16 @@ main() {
     create_go_modules
     setup_go_workspace
     create_config_files
+    create_minimal_main_files
     setup_git_hooks
     create_additional_scripts
     run_initial_setup
 
     print_next_steps
 }
+
+# Error handling
+trap 'log_error "Setup failed at line $LINENO. Exit code: $?"' ERR
 
 # Run main function
 main "$@"
