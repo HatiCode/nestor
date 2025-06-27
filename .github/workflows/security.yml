@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main, develop]
   schedule:
-    - cron: "0 6 * * 1" # Weekly on Monday at 6 AM UTC
+    - cron: "0 6 * * 1"
 
 env:
   GO_VERSION: "1.24.4"
@@ -41,22 +41,21 @@ jobs:
         run: |
           echo "Setting up Go workspace..."
 
-          # Create workspace if it doesn't exist
           if [ ! -f go.work ]; then
             echo "Creating Go workspace..."
             mkdir -p cli orchestrator processor shared
 
-            # Create basic go.mod files
             for component in cli orchestrator processor shared; do
               if [ ! -f "$component/go.mod" ]; then
+                echo "Creating go.mod for $component..."
                 cd "$component"
-                go mod init "github.com/HatiCode/nestor/$component"
+                echo "module github.com/HatiCode/nestor/$component" > go.mod
+                echo "" >> go.mod
                 echo "go ${{ env.GO_VERSION }}" >> go.mod
                 cd ..
               fi
             done
 
-            # Create go.work file
             echo "go 1.24.4" > go.work
             echo "" >> go.work
             echo "use (" >> go.work
@@ -65,9 +64,15 @@ jobs:
             echo "	./processor" >> go.work
             echo "	./shared" >> go.work
             echo ")" >> go.work
+
+            echo "Created go.work file:"
+            cat go.work
           fi
 
+          echo "Syncing workspace..."
           go work sync
+
+          echo "Downloading dependencies..."
           go mod download
 
       - name: Run Gosec Security Scanner
@@ -75,10 +80,7 @@ jobs:
           echo "🔒 Running Gosec security scanner..."
           go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
 
-          # Run gosec and save results
           gosec -fmt=json -out=gosec-results.json ./... || echo "Gosec found security issues"
-
-          # Create human-readable report
           gosec -fmt=text ./... > gosec-report.txt || echo "Gosec report generated"
 
           echo "✅ Gosec scan completed"
@@ -87,13 +89,9 @@ jobs:
         run: |
           echo "🔍 Running Trivy vulnerability scanner..."
 
-          # Install trivy
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-          # Scan for vulnerabilities
           trivy fs --format json --output trivy-results.json . || echo "Trivy found vulnerabilities"
-
-          # Create human-readable report
           trivy fs --format table . > trivy-report.txt || echo "Trivy report generated"
 
           echo "✅ Trivy scan completed"
@@ -102,10 +100,8 @@ jobs:
         run: |
           echo "📦 Checking Go dependencies..."
 
-          # Use govulncheck (official Go vulnerability scanner)
           go install golang.org/x/vuln/cmd/govulncheck@latest
 
-          # Scan each component
           for component in cli orchestrator processor shared; do
             if [ -f "$component/go.mod" ]; then
               echo "Scanning $component..."
@@ -121,27 +117,22 @@ jobs:
         run: |
           echo "📊 Analyzing security scan results..."
 
-          # Initialize counters
           gosec_issues=0
           trivy_issues=0
           vuln_issues=0
 
-          # Count Gosec issues
           if [ -f gosec-results.json ]; then
             gosec_issues=$(jq '.Stats.found // 0' gosec-results.json 2>/dev/null || echo "0")
           fi
 
-          # Count Trivy issues
           if [ -f trivy-results.json ]; then
             trivy_issues=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-results.json 2>/dev/null || echo "0")
           fi
 
-          # Check for vulnerability issues
           if ls govulncheck-*.txt 1> /dev/null 2>&1; then
             vuln_issues=$(grep -c "Vulnerability" govulncheck-*.txt || echo "0")
           fi
 
-          # Create summary using echo commands instead of heredoc
           echo "# 🛡️ Security Scan Results" > security-summary.md
           echo "" >> security-summary.md
           echo "## 📊 Summary" >> security-summary.md
@@ -178,10 +169,7 @@ jobs:
           echo "3. Run \`make security\` locally for more details" >> security-summary.md
           echo "4. Update dependencies with \`make deps-upgrade\`" >> security-summary.md
 
-          # Display summary
           cat security-summary.md
-
-          # Add to GitHub Step Summary
           cat security-summary.md >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Security Reports
@@ -231,7 +219,6 @@ jobs:
         run: |
           echo "🔍 Checking for dependency changes in PR..."
 
-          # Check if any go.mod or go.sum files changed
           if git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} | grep -E "(go\.mod|go\.sum)"; then
             echo "📦 Dependency changes detected:"
             git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} | grep -E "(go\.mod|go\.sum)"

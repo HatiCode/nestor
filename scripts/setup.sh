@@ -483,45 +483,54 @@ create_go_modules() {
     # CLI module
     if [[ ! -f "$CLI_DIR/go.mod" ]]; then
         cd "$CLI_DIR"
-        go mod init github.com/HatiCode/nestor/cli
+        echo "module github.com/HatiCode/nestor/cli" > go.mod
+        echo "" >> go.mod
+        echo "go ${GO_VERSION}" >> go.mod
         log_success "Created CLI go.mod"
     fi
 
-    # Orchestrator module (update if exists or create)
+    # Orchestrator module
     if [[ ! -f "$ORCHESTRATOR_DIR/go.mod" ]]; then
         cd "$ORCHESTRATOR_DIR"
-        go mod init github.com/HatiCode/nestor/orchestrator
+        echo "module github.com/HatiCode/nestor/orchestrator" > go.mod
+        echo "" >> go.mod
+        echo "go ${GO_VERSION}" >> go.mod
         log_success "Created Orchestrator go.mod"
     fi
 
     # Processor module
     if [[ ! -f "$PROCESSOR_DIR/go.mod" ]]; then
         cd "$PROCESSOR_DIR"
-        go mod init github.com/HatiCode/nestor/processor
+        echo "module github.com/HatiCode/nestor/processor" > go.mod
+        echo "" >> go.mod
+        echo "go ${GO_VERSION}" >> go.mod
         log_success "Created Processor go.mod"
     fi
 
     # Shared module
     if [[ ! -f "$SHARED_DIR/go.mod" ]]; then
         cd "$SHARED_DIR"
-        go mod init github.com/HatiCode/nestor/shared
+        echo "module github.com/HatiCode/nestor/shared" > go.mod
+        echo "" >> go.mod
+        echo "go ${GO_VERSION}" >> go.mod
         log_success "Created Shared go.mod"
     fi
 
     cd "$ROOT_DIR"
 
-    # Ensure all modules use the same Go version
+    # Update existing modules to ensure correct Go version (no duplicates)
     for dir in "$CLI_DIR" "$ORCHESTRATOR_DIR" "$PROCESSOR_DIR" "$SHARED_DIR"; do
         if [[ -f "$dir/go.mod" ]]; then
-            log_info "Updating Go version in $dir/go.mod..."
+            log_info "Verifying Go version in $dir/go.mod..."
             cd "$dir"
 
-            # Update go directive in go.mod if it exists
-            if grep -q "^go " go.mod; then
-                sed -i.bak "s/^go .*/go ${GO_VERSION}/" go.mod && rm go.mod.bak
-            else
-                # Add go directive if it doesn't exist
-                echo -e "\ngo ${GO_VERSION}" >> go.mod
+            # Check if go directive exists and is correct
+            if ! grep -q "^go ${GO_VERSION}$" go.mod; then
+                # Remove any existing go directive and add the correct one
+                sed -i.bak '/^go /d' go.mod && rm go.mod.bak
+                echo "" >> go.mod
+                echo "go ${GO_VERSION}" >> go.mod
+                log_info "Updated Go version in $dir/go.mod"
             fi
 
             go mod tidy
