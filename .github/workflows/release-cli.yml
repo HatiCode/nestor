@@ -84,7 +84,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-cli-release-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
+          key: go-cli-release-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('go.work', 'cli/go.mod', 'shared/go.mod') }}
           restore-keys: |
             go-cli-release-${{ runner.os }}-${{ env.GO_VERSION }}-
             go-cli-release-${{ runner.os }}-

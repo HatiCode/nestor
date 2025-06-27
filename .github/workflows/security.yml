@@ -33,9 +33,10 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-security-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
+          key: go-security-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('go.work', '**/go.mod') }}
           restore-keys: |
             go-security-${{ runner.os }}-${{ env.GO_VERSION }}-
+            go-security-${{ runner.os }}-
 
       - name: Setup workspace
         run: |
