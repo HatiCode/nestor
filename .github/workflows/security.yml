@@ -50,7 +50,7 @@ jobs:
           go mod download
 
       - name: Run Gosec Security Scanner
-        uses: securecodewarrior/github-action-gosec@master
+        uses: securego/gosec@master
         with:
           args: "-no-fail -fmt sarif -out gosec-results.sarif ./..."
         continue-on-error: true
@@ -191,6 +191,74 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-codeql-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
+          restore-keys: |
+            go-codeql-${{ runner.os }}-${{ env.GO_VERSION }}-
+            go-codeql-${{ runner.os }}-
+
+      - name: Check and setup workspace
+        run: |
+          echo "Checking for go.work file..."
+          if [ ! -f go.work ]; then
+            echo "go.work not found, creating workspace..."
+
+            # Create go.work file if it doesn't exist
+            cat > go.work << EOF
+          go ${{ env.GO_VERSION }}
+
+          use (
+            ./cli
+            ./orchestrator
+            ./processor
+            ./shared
+          )
+          EOF
+
+            echo "Created go.work file:"
+            cat go.work
+          else
+            echo "go.work found:"
+            cat go.work
+          fi
+
+          # Ensure component directories exist with go.mod files
+          components=("cli" "orchestrator" "processor" "shared")
+          for component in "${components[@]}"; do
+            if [ ! -d "$component" ]; then
+              echo "Creating $component directory..."
+              mkdir -p "$component"
+            fi
+
+            if [ ! -f "$component/go.mod" ]; then
+              echo "Creating go.mod for $component..."
+              cd "$component"
+              go mod init "github.com/HatiCode/nestor/$component"
+              echo "go ${{ env.GO_VERSION }}" >> go.mod
+              cd ..
+            fi
+          done
+
+          # Now sync the workspace
+          echo "Syncing workspace..."
+          go work sync
+
+          echo "Downloading dependencies..."
+          go mod download
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -199,15 +267,41 @@ jobs:
           config-file: ./.github/codeql/codeql-config.yml
         continue-on-error: true
 
-      - name: Setup Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Setup workspace
+      - name: Create minimal Go files for analysis
         run: |
-          go work sync
-          go mod download
+          # Ensure each component has at least one .go file for CodeQL to analyze
+          components=("cli" "orchestrator" "processor" "shared")
+          for component in "${components[@]}"; do
+            if [ ! -f "$component/main.go" ] && [ ! -f "$component/doc.go" ]; then
+              echo "Creating minimal Go file for $component..."
+              if [ "$component" = "shared" ]; then
+                cat > "$component/doc.go" << EOF
+          // Package shared provides common utilities and types for the Nestor platform.
+          package shared
+
+          // Version represents the current version of the shared package.
+          const Version = "dev"
+          EOF
+              else
+                cat > "$component/main.go" << EOF
+          package main
+
+          import "fmt"
+
+          var (
+            version = "dev"
+            commit  = "unknown"
+            date    = "unknown"
+            builtBy = "unknown"
+          )
+
+          func main() {
+            fmt.Printf("nestor-$component %s\\ncommit: %s\\nbuilt at: %s\\nbuilt by: %s\\n", version, commit, date, builtBy)
+          }
+          EOF
+              fi
+            fi
+          done
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3

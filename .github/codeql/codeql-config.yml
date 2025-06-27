@@ -1,0 +1,48 @@
+name: "Nestor CodeQL Configuration"
+
+# Disable default queries to reduce noise for early development
+disable-default-queries: false
+
+# Include additional query packs for comprehensive analysis
+queries:
+  - name: security-extended
+    uses: security-extended
+  - name: security-and-quality
+    uses: security-and-quality
+
+# Path filters to focus analysis on relevant code
+paths:
+  - "cli/**"
+  - "orchestrator/**"
+  - "processor/**"
+  - "shared/**"
+
+# Ignore paths that don't need analysis
+paths-ignore:
+  - "**/*_test.go"
+  - "**/testdata/**"
+  - "**/vendor/**"
+  - "**/node_modules/**"
+  - "dist/**"
+  - "coverage/**"
+  - "logs/**"
+  - "tmp/**"
+  - "docs/**"
+  - "scripts/**"
+  - "deployments/**"
+  - "examples/**"
+
+# Go-specific configuration
+go:
+  # Include build tags that might be relevant
+  build-tags:
+    - "integration"
+    - "lambda"
+    - "gcf"
+    - "azure"
+
+  # Go environment variables
+  environment:
+    CGO_ENABLED: "0"
+    GOOS: "linux"
+    GOARCH: "amd64"

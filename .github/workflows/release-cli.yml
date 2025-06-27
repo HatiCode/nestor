@@ -138,6 +138,9 @@ jobs:
           go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
           gosec -no-fail -fmt=json -out=gosec-results.json ./cli/... || echo "⚠️ Security scan completed with warnings"
 
+          # Also generate SARIF format for GitHub Security tab
+          gosec -no-fail -fmt=sarif -out=gosec-results.sarif ./cli/... || echo "⚠️ SARIF generation completed"
+
           # Install and run trivy
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
           trivy fs --format json --output trivy-results.json ./cli/ || echo "⚠️ Vulnerability scan completed"
@@ -321,8 +324,17 @@ jobs:
           name: cli-security-scan-results-${{ github.run_number }}
           path: |
             gosec-results.json
+            gosec-results.sarif
             trivy-results.json
           retention-days: 30
+
+      - name: Upload Gosec SARIF to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('gosec-results.sarif') != ''
+        with:
+          sarif_file: gosec-results.sarif
+          category: gosec-cli-release
+        continue-on-error: true
 
   post-release:
     runs-on: ubuntu-latest
