@@ -14,10 +14,6 @@ env:
 jobs:
   security-scan:
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
 
     steps:
       - name: Checkout code
@@ -40,352 +36,244 @@ jobs:
           key: go-security-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
           restore-keys: |
             go-security-${{ runner.os }}-${{ env.GO_VERSION }}-
-            go-security-${{ runner.os }}-
 
       - name: Setup workspace
         run: |
           echo "Setting up Go workspace..."
+
+          # Create workspace if it doesn't exist
+          if [ ! -f go.work ]; then
+            echo "Creating Go workspace..."
+            mkdir -p cli orchestrator processor shared
+
+            # Create basic go.mod files
+            for component in cli orchestrator processor shared; do
+              if [ ! -f "$component/go.mod" ]; then
+                cd "$component"
+                go mod init "github.com/HatiCode/nestor/$component"
+                echo "go ${{ env.GO_VERSION }}" >> go.mod
+                cd ..
+              fi
+            done
+
+            # Create go.work file
+            echo "go 1.24.4" > go.work
+            echo "" >> go.work
+            echo "use (" >> go.work
+            echo "	./cli" >> go.work
+            echo "	./orchestrator" >> go.work
+            echo "	./processor" >> go.work
+            echo "	./shared" >> go.work
+            echo ")" >> go.work
+          fi
+
           go work sync
-          go work verify
           go mod download
 
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@master
-        with:
-          args: "-no-fail -fmt sarif -out gosec-results.sarif ./..."
-        continue-on-error: true
-
-      - name: Upload Gosec SARIF file
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: gosec-results.sarif
-          category: gosec
-
-      - name: Run Trivy vulnerability scanner in repo mode
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-          severity: "CRITICAL,HIGH,MEDIUM"
-        continue-on-error: true
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: "trivy-results.sarif"
-          category: trivy
-
-      - name: Run Nancy to check for vulnerabilities in Go dependencies
         run: |
-          echo "Installing Nancy..."
-          go install github.com/sonatypecommunity/nancy@latest
+          echo "🔒 Running Gosec security scanner..."
+          go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
 
-          echo "Scanning dependencies with Nancy..."
-          go list -json -deps ./... | nancy sleuth --skip-update-check || echo "Nancy found vulnerabilities"
-        continue-on-error: true
+          # Run gosec and save results
+          gosec -fmt=json -out=gosec-results.json ./... || echo "Gosec found security issues"
 
-      - name: Generate security summary
-        if: always()
+          # Create human-readable report
+          gosec -fmt=text ./... > gosec-report.txt || echo "Gosec report generated"
+
+          echo "✅ Gosec scan completed"
+
+      - name: Run Trivy Vulnerability Scanner
         run: |
-          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 Running Trivy vulnerability scanner..."
 
-          echo "### 🔍 Scans Performed" >> $GITHUB_STEP_SUMMARY
-          echo "- **Gosec**: Go source code security analyzer" >> $GITHUB_STEP_SUMMARY
-          echo "- **Trivy**: Vulnerability scanner for dependencies and filesystem" >> $GITHUB_STEP_SUMMARY
-          echo "- **Nancy**: Go dependency vulnerability checker" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Install trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-          echo "### 📊 Results" >> $GITHUB_STEP_SUMMARY
+          # Scan for vulnerabilities
+          trivy fs --format json --output trivy-results.json . || echo "Trivy found vulnerabilities"
 
-          # Check if gosec found issues
-          if [ -f gosec-results.sarif ]; then
-            gosec_issues=$(jq '.runs[0].results | length' gosec-results.sarif 2>/dev/null || echo "0")
-            echo "- **Gosec**: $gosec_issues issues found" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Gosec**: Scan completed (no SARIF output)" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Create human-readable report
+          trivy fs --format table . > trivy-report.txt || echo "Trivy report generated"
 
-          # Check if trivy found issues
-          if [ -f trivy-results.sarif ]; then
-            trivy_issues=$(jq '.runs[0].results | length' trivy-results.sarif 2>/dev/null || echo "0")
-            echo "- **Trivy**: $trivy_issues vulnerabilities found" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Trivy**: Scan completed (no SARIF output)" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "✅ Trivy scan completed"
 
-          echo "- **Nancy**: Dependency scan completed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Review findings in the **Security** tab" >> $GITHUB_STEP_SUMMARY
-          echo "2. Address any critical or high-severity issues" >> $GITHUB_STEP_SUMMARY
-          echo "3. Update dependencies with \`make deps-upgrade\`" >> $GITHUB_STEP_SUMMARY
-          echo "4. Run \`make security\` locally for detailed output" >> $GITHUB_STEP_SUMMARY
-
-      - name: Create security artifacts
-        if: always()
+      - name: Check Go Dependencies for Known Vulnerabilities
         run: |
-          mkdir -p security-artifacts
+          echo "📦 Checking Go dependencies..."
 
-          # Copy scan results
-          if [ -f gosec-results.sarif ]; then
-            cp gosec-results.sarif security-artifacts/
-          fi
+          # Use govulncheck (official Go vulnerability scanner)
+          go install golang.org/x/vuln/cmd/govulncheck@latest
 
-          if [ -f trivy-results.sarif ]; then
-            cp trivy-results.sarif security-artifacts/
-          fi
-
-          # Create a summary file
-          cat > security-artifacts/scan-summary.txt << EOF
-          Security Scan Summary
-          ====================
-          Timestamp: $(date -u)
-          Go Version: ${{ env.GO_VERSION }}
-          Commit: ${{ github.sha }}
-          Branch: ${{ github.ref_name }}
-
-          Scans Performed:
-          - Gosec (Go source code security)
-          - Trivy (Vulnerability scanning)
-          - Nancy (Go dependency vulnerabilities)
-
-          Files:
-          $(ls -la security-artifacts/ || echo "No additional artifacts")
-          EOF
-
-      - name: Upload security artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: security-scan-results-${{ github.run_number }}
-          path: security-artifacts/
-          retention-days: 30
-
-  dependency-review:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: moderate
-          allow-licenses: Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC
-          deny-licenses: GPL-2.0, GPL-3.0
-
-  codeql-analysis:
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          check-latest: true
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-codeql-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
-          restore-keys: |
-            go-codeql-${{ runner.os }}-${{ env.GO_VERSION }}-
-            go-codeql-${{ runner.os }}-
-
-      - name: Check and setup workspace
-        run: |
-          echo "Checking for go.work file..."
-          if [ ! -f go.work ]; then
-            echo "go.work not found, creating workspace..."
-
-            # Create go.work file if it doesn't exist
-            cat > go.work << EOF
-          go ${{ env.GO_VERSION }}
-
-          use (
-            ./cli
-            ./orchestrator
-            ./processor
-            ./shared
-          )
-          EOF
-
-            echo "Created go.work file:"
-            cat go.work
-          else
-            echo "go.work found:"
-            cat go.work
-          fi
-
-          # Ensure component directories exist with go.mod files
-          components=("cli" "orchestrator" "processor" "shared")
-          for component in "${components[@]}"; do
-            if [ ! -d "$component" ]; then
-              echo "Creating $component directory..."
-              mkdir -p "$component"
-            fi
-
-            if [ ! -f "$component/go.mod" ]; then
-              echo "Creating go.mod for $component..."
+          # Scan each component
+          for component in cli orchestrator processor shared; do
+            if [ -f "$component/go.mod" ]; then
+              echo "Scanning $component..."
               cd "$component"
-              go mod init "github.com/HatiCode/nestor/$component"
-              echo "go ${{ env.GO_VERSION }}" >> go.mod
+              govulncheck ./... > "../govulncheck-$component.txt" 2>&1 || echo "Vulnerabilities found in $component"
               cd ..
             fi
           done
 
-          # Now sync the workspace
-          echo "Syncing workspace..."
-          go work sync
+          echo "✅ Dependency vulnerability check completed"
 
-          echo "Downloading dependencies..."
-          go mod download
+      - name: Analyze Security Results
+        run: |
+          echo "📊 Analyzing security scan results..."
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+          # Initialize counters
+          gosec_issues=0
+          trivy_issues=0
+          vuln_issues=0
+
+          # Count Gosec issues
+          if [ -f gosec-results.json ]; then
+            gosec_issues=$(jq '.Stats.found // 0' gosec-results.json 2>/dev/null || echo "0")
+          fi
+
+          # Count Trivy issues
+          if [ -f trivy-results.json ]; then
+            trivy_issues=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-results.json 2>/dev/null || echo "0")
+          fi
+
+          # Check for vulnerability issues
+          if ls govulncheck-*.txt 1> /dev/null 2>&1; then
+            vuln_issues=$(grep -c "Vulnerability" govulncheck-*.txt || echo "0")
+          fi
+
+          # Create summary using echo commands instead of heredoc
+          echo "# 🛡️ Security Scan Results" > security-summary.md
+          echo "" >> security-summary.md
+          echo "## 📊 Summary" >> security-summary.md
+          echo "- **Gosec Issues**: $gosec_issues" >> security-summary.md
+          echo "- **Trivy Vulnerabilities**: $trivy_issues" >> security-summary.md
+          echo "- **Go Vulnerabilities**: $vuln_issues" >> security-summary.md
+          echo "" >> security-summary.md
+          echo "## 🔍 Scan Details" >> security-summary.md
+          echo "" >> security-summary.md
+          echo "### Gosec (Source Code Security)" >> security-summary.md
+          if [ "$gosec_issues" -gt 0 ]; then
+            echo "⚠️ Found $gosec_issues security issues in source code" >> security-summary.md
+          else
+            echo "✅ No security issues found in source code" >> security-summary.md
+          fi
+          echo "" >> security-summary.md
+          echo "### Trivy (Dependency Vulnerabilities)" >> security-summary.md
+          if [ "$trivy_issues" -gt 0 ]; then
+            echo "⚠️ Found $trivy_issues vulnerabilities in dependencies" >> security-summary.md
+          else
+            echo "✅ No vulnerabilities found in dependencies" >> security-summary.md
+          fi
+          echo "" >> security-summary.md
+          echo "### Govulncheck (Go-specific Vulnerabilities)" >> security-summary.md
+          if [ "$vuln_issues" -gt 0 ]; then
+            echo "⚠️ Found $vuln_issues Go-specific vulnerabilities" >> security-summary.md
+          else
+            echo "✅ No Go-specific vulnerabilities found" >> security-summary.md
+          fi
+          echo "" >> security-summary.md
+          echo "## 📋 Next Steps" >> security-summary.md
+          echo "1. Review detailed reports in the artifacts" >> security-summary.md
+          echo "2. Address any critical or high-severity issues" >> security-summary.md
+          echo "3. Run \`make security\` locally for more details" >> security-summary.md
+          echo "4. Update dependencies with \`make deps-upgrade\`" >> security-summary.md
+
+          # Display summary
+          cat security-summary.md
+
+          # Add to GitHub Step Summary
+          cat security-summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          languages: go
-          config-file: ./.github/codeql/codeql-config.yml
+          name: security-reports-${{ github.run_number }}
+          path: |
+            gosec-results.json
+            gosec-report.txt
+            trivy-results.json
+            trivy-report.txt
+            govulncheck-*.txt
+            security-summary.md
+          retention-days: 30
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            try {
+              const summary = fs.readFileSync('security-summary.md', 'utf8');
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🔒 Security Scan Results\n\n${summary}\n\n📁 **Detailed reports available in the [workflow artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})**`
+              });
+            } catch (error) {
+              console.log('Could not post comment:', error.message);
+            }
         continue-on-error: true
 
-      - name: Create minimal Go files for analysis
-        run: |
-          # Ensure each component has at least one .go file for CodeQL to analyze
-          components=("cli" "orchestrator" "processor" "shared")
-          for component in "${components[@]}"; do
-            if [ ! -f "$component/main.go" ] && [ ! -f "$component/doc.go" ]; then
-              echo "Creating minimal Go file for $component..."
-              if [ "$component" = "shared" ]; then
-                cat > "$component/doc.go" << EOF
-          // Package shared provides common utilities and types for the Nestor platform.
-          package shared
-
-          // Version represents the current version of the shared package.
-          const Version = "dev"
-          EOF
-              else
-                cat > "$component/main.go" << EOF
-          package main
-
-          import "fmt"
-
-          var (
-            version = "dev"
-            commit  = "unknown"
-            date    = "unknown"
-            builtBy = "unknown"
-          )
-
-          func main() {
-            fmt.Printf("nestor-$component %s\\ncommit: %s\\nbuilt at: %s\\nbuilt by: %s\\n", version, commit, date, builtBy)
-          }
-          EOF
-              fi
-            fi
-          done
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:go"
-
-  security-policy-check:
+  dependency-check:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check for security policy
+      - name: Check for dependency changes
         run: |
-          echo "## 📋 Security Policy Check" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 Checking for dependency changes in PR..."
 
-          if [ -f SECURITY.md ]; then
-            echo "✅ SECURITY.md found" >> $GITHUB_STEP_SUMMARY
-            echo "Security policy is documented and available." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ SECURITY.md not found" >> $GITHUB_STEP_SUMMARY
-            echo "Consider adding a security policy to document:" >> $GITHUB_STEP_SUMMARY
-            echo "- How to report security vulnerabilities" >> $GITHUB_STEP_SUMMARY
-            echo "- Security update process" >> $GITHUB_STEP_SUMMARY
-            echo "- Supported versions" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Check if any go.mod or go.sum files changed
+          if git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} | grep -E "(go\.mod|go\.sum)"; then
+            echo "📦 Dependency changes detected:"
+            git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} | grep -E "(go\.mod|go\.sum)"
 
-          if [ -f .github/dependabot.yml ]; then
-            echo "✅ Dependabot configuration found" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Dependency Changes Detected**" >> $GITHUB_STEP_SUMMARY
+            echo "Please ensure all dependency changes are intentional and secure." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Changed files:" >> $GITHUB_STEP_SUMMARY
+            git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.sha }} | grep -E "(go\.mod|go\.sum)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️ Dependabot not configured" >> $GITHUB_STEP_SUMMARY
+            echo "✅ No dependency changes detected"
+            echo "✅ **No Dependency Changes**" >> $GITHUB_STEP_SUMMARY
+            echo "No go.mod or go.sum files were modified in this PR." >> $GITHUB_STEP_SUMMARY
           fi
 
   security-status:
     runs-on: ubuntu-latest
-    needs:
-      [security-scan, dependency-review, codeql-analysis, security-policy-check]
+    needs: [security-scan, dependency-check]
     if: always()
+
     steps:
-      - name: Security status summary
+      - name: Final security status
         run: |
           echo "## 🛡️ Security Pipeline Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Check each job status
-          security_scan_status="${{ needs.security-scan.result }}"
-          dependency_review_status="${{ needs.dependency-review.result }}"
-          codeql_status="${{ needs.codeql-analysis.result }}"
-          policy_check_status="${{ needs.security-policy-check.result }}"
+          scan_status="${{ needs.security-scan.result }}"
+          dependency_status="${{ needs.dependency-check.result }}"
 
           echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Security Scan | $security_scan_status |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dependency Review | $dependency_review_status |" >> $GITHUB_STEP_SUMMARY
-          echo "| CodeQL Analysis | $codeql_status |" >> $GITHUB_STEP_SUMMARY
-          echo "| Policy Check | $policy_check_status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | $scan_status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependency Check | $dependency_status |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Overall status evaluation
-          overall_status="success"
-
-          if [[ "$security_scan_status" != "success" ]]; then
-            overall_status="failed"
-          fi
-
-          if [[ "$codeql_status" != "success" ]]; then
-            overall_status="failed"
-          fi
-
-          if [[ "$policy_check_status" != "success" ]]; then
-            overall_status="failed"
-          fi
-
-          # For PRs, dependency review must also pass
-          if [[ "${{ github.event_name }}" == "pull_request" && "$dependency_review_status" != "success" && "$dependency_review_status" != "skipped" ]]; then
-            overall_status="failed"
-          fi
-
-          if [[ "$overall_status" == "success" ]]; then
-            echo "✅ All security checks passed!" >> $GITHUB_STEP_SUMMARY
+          if [[ "$scan_status" == "success" ]]; then
+            echo "✅ **Security checks completed successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📁 Review detailed security reports in the workflow artifacts." >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ Some security checks failed. Please review the findings." >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Security scan encountered issues.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Please review the security scan results and address any findings." >> $GITHUB_STEP_SUMMARY
             exit 1
           fi

@@ -240,15 +240,40 @@ vet: check-workspace ## Run go vet on all components
 	@go vet ./...
 	@echo "$(GREEN)[SUCCESS]$(NC) go vet completed"
 
-security: check-workspace ## Run security scans
+security: check-workspace ## Run security scans (simplified for personal repos)
 	@echo "$(BLUE)[INFO]$(NC) Running security scans..."
 	@mkdir -p $(LOGS_DIR)
-	@echo "$(BLUE)[INFO]$(NC) Running gosec..."
-	@gosec -fmt=json -out=$(LOGS_DIR)/gosec.json ./... || echo "$(YELLOW)[WARNING]$(NC) gosec found issues"
-	@echo "$(BLUE)[INFO]$(NC) Running trivy..."
-	@trivy fs --format json --output $(LOGS_DIR)/trivy.json . || echo "$(YELLOW)[WARNING]$(NC) trivy found issues"
+
+	@echo "$(BLUE)[INFO]$(NC) Installing security tools..."
+	@go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+	@go install golang.org/x/vuln/cmd/govulncheck@latest
+
+	@echo "$(BLUE)[INFO]$(NC) Running Gosec..."
+	@gosec -fmt=json -out=$(LOGS_DIR)/gosec.json ./... || echo "$(YELLOW)[WARNING]$(NC) Gosec found issues"
+	@gosec -fmt=text ./... > $(LOGS_DIR)/gosec.txt || echo "$(YELLOW)[WARNING]$(NC) Gosec report generated"
+
+	@echo "$(BLUE)[INFO]$(NC) Running Govulncheck..."
+	@for dir in $(CLI_DIR) $(ORCHESTRATOR_DIR) $(PROCESSOR_DIR) $(SHARED_DIR); do \
+		if [ -f $dir/go.mod ]; then \
+			echo "$(BLUE)[INFO]$(NC) Scanning $dir..."; \
+			cd $dir && govulncheck ./... > ../$(LOGS_DIR)/govulncheck-$(basename $dir).txt 2>&1 || echo "$(YELLOW)[WARNING]$(NC) Issues found in $dir"; \
+			cd ..; \
+		fi; \
+	done
+
+	@echo "$(BLUE)[INFO]$(NC) Installing and running Trivy..."
+	@if ! command -v trivy >/dev/null 2>&1; then \
+		curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b $(go env GOPATH)/bin; \
+	fi
+	@trivy fs --format json --output $(LOGS_DIR)/trivy.json . || echo "$(YELLOW)[WARNING]$(NC) Trivy found vulnerabilities"
+	@trivy fs --format table . > $(LOGS_DIR)/trivy.txt || echo "$(YELLOW)[WARNING]$(NC) Trivy report generated"
+
 	@echo "$(GREEN)[SUCCESS]$(NC) Security scans completed"
 	@echo "$(CYAN)[INFO]$(NC) Results saved to $(LOGS_DIR)/"
+	@echo "$(CYAN)[INFO]$(NC) Review the following files:"
+	@echo "  - $(LOGS_DIR)/gosec.txt (source code security)"
+	@echo "  - $(LOGS_DIR)/trivy.txt (dependency vulnerabilities)"
+	@echo "  - $(LOGS_DIR)/govulncheck-*.txt (Go-specific vulnerabilities)"
 
 create-lint-config: ## Create default golangci-lint configuration
 	@mkdir -p $(TOOLS_DIR)/lint
