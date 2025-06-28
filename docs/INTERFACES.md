@@ -2,7 +2,27 @@
 // Keep this in sync with actual implementations
 
 // =============================================================================
-// STORAGE INTERFACES (internal/storage/interfaces.go)
+// PACKAGE STRUCTURE AND IMPORTS
+// =============================================================================
+
+// Centralized JSON configuration (pkg/json/json.go)
+import jsoniter "github.com/json-iterator/go"
+
+var (
+    Marshal      = jsonNestor.Marshal
+    Unmarshal    = jsonNestor.Unmarshal
+    MarshalToString = jsonNestor.MarshalToString
+)
+
+// Models use centralized JSON (pkg/models/component.go)
+import "github.com/HatiCode/nestor/orchestrator/pkg/json"
+
+func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
+    return json.Marshal(c)
+}
+
+// =============================================================================
+// STORAGE INTERFACES (internal/storage/store.go)
 // =============================================================================
 
 // CatalogStore - Main storage interface combining all component operations
