@@ -1,0 +1,72 @@
+version: "3.8"
+
+services:
+  orchestrator:
+    build:
+      context: ../../..
+      dockerfile: orchestrator/deployments/docker/Dockerfile
+      args:
+        VERSION: dev
+        COMMIT: local
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: nestor-orchestrator-dev
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=debug
+      - CONFIG_PATH=/app/config/config.yaml
+    volumes:
+      - ./config.yaml:/app/config/config.yaml:ro
+      - orchestrator-data:/app/data
+    depends_on:
+      dynamodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: nestor-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  dynamodb:
+    image: amazon/dynamodb-local:2.0.0
+    container_name: nestor-dynamodb-dev
+    command:
+      ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-optimizeDbBeforeStartup"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    working_dir: /home/dynamodblocal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  orchestrator-data:
+  redis-data:
+  dynamodb-data:
+
+networks:
+  default:
+    name: nestor-dev

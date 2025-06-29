@@ -1,0 +1,53 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: "30s"
+  write_timeout: "30s"
+  shutdown_timeout: "30s"
+
+logging:
+  level: "debug"
+  format: "console"
+  enable_structured: true
+
+storage:
+  type: "dynamodb"
+  dynamodb:
+    table_name: "nestor-components-dev"
+    region: "us-west-2"
+    endpoint: "http://dynamodb:8000"
+    read_capacity: 5
+    write_capacity: 5
+    enable_point_in_time_recovery: false
+
+cache:
+  type: "redis"
+  redis:
+    url: "redis://redis:6379"
+    pool_size: 5
+    max_retries: 3
+    ttl: "5m"
+
+git:
+  repositories:
+    - name: "local-components"
+      url: "https://github.com/HatiCode/nestor.git"
+      path: "examples/components"
+      branch: "main"
+      poll_interval: "60s"
+
+sse:
+  enabled: true
+  max_connections: 100
+  heartbeat_interval: "30s"
+  buffer_size: 100
+
+metrics:
+  enabled: true
+  path: "/metrics"
+  port: 8080
+
+validation:
+  cache_enabled: true
+  cache_ttl: "10m"
+  cache_size: 100

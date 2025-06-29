@@ -1,0 +1,47 @@
+# Git files
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+docs/
+examples/
+README*
+
+# Build artifacts
+dist/
+coverage/
+logs/
+tmp/
+*.log
+
+# Test files
+*_test.go
+testdata/
+test/
+
+# Development files
+.env
+.env.local
+.env.example
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node modules (if any)
+node_modules/
+
+# Temporary files
+.DS_Store
+Thumbs.db
+
+# Deployment files not needed in image
+deployments/k8s/
+deployments/scripts/
+deployments/helm/templates/
+deployments/helm/values*.yaml
+*.yml
+*.yaml

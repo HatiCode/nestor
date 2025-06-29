@@ -1,0 +1,38 @@
+replicaCount: 1
+
+image:
+  repository: nestor/orchestrator
+  tag: "dev"
+  pullPolicy: Never # Use local images
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+config:
+  logging:
+    level: "debug"
+    format: "console"
+
+  storage:
+    dynamodb:
+      endpoint: "http://nestor-dynamodb-local:8000" # Local DynamoDB
+
+  git:
+    repositories:
+      - name: "local-components"
+        url: "file:///app/components" # Local mounted volume
+        path: "."
+        branch: "main"
+        pollInterval: "30s"
+
+# Enable local dependencies
+dependencies:
+  redis:
+    enabled: true
+  dynamodbLocal:
+    enabled: true

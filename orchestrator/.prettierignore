@@ -1,0 +1,8 @@
+# Helm templates contain Go template syntax that Prettier can't handle
+deployments/helm/templates/**
+**/*.tpl
+
+# Also ignore generated files
+dist/**
+coverage/**
+*.log

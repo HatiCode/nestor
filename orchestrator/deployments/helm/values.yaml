@@ -1,0 +1,257 @@
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+replicaCount: 2
+
+image:
+  registry: ghcr.io
+  repository: haticode/nestor/orchestrator
+  pullPolicy: IfNotPresent
+  tag: "" # Will use Chart.appVersion if not set
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: orchestrator.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: orchestrator-tls
+    #   hosts:
+    #     - orchestrator.local
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 2
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Additional volumes on the output Deployment definition
+volumes: []
+
+# Additional volumeMounts on the output Deployment definition
+volumeMounts: []
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Orchestrator-specific configuration
+config:
+  # Server configuration
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    readTimeout: "30s"
+    writeTimeout: "30s"
+    shutdownTimeout: "30s"
+
+  # Logging configuration
+  logging:
+    level: "info"
+    format: "json"
+    enableStructured: true
+
+  # Storage configuration
+  storage:
+    type: "dynamodb"
+    dynamodb:
+      tableName: "nestor-components"
+      region: "us-west-2"
+      endpoint: "" # Leave empty for AWS service, set for local DynamoDB
+      readCapacity: 5
+      writeCapacity: 5
+      enablePointInTimeRecovery: false
+
+  # Cache configuration
+  cache:
+    type: "redis"
+    redis:
+      url: "redis://nestor-redis:6379"
+      poolSize: 5
+      maxRetries: 3
+      ttl: "5m"
+
+  # Git repositories for component definitions
+  git:
+    repositories:
+      - name: "platform-components"
+        url: "https://github.com/company/platform-infrastructure.git"
+        path: "components"
+        branch: "main"
+        pollInterval: "5m"
+
+  # Server-Sent Events configuration
+  sse:
+    enabled: true
+    maxConnections: 100
+    heartbeatInterval: "30s"
+    bufferSize: 100
+
+  # Metrics configuration
+  metrics:
+    enabled: true
+    path: "/metrics"
+    port: 8080
+
+  # Validation configuration
+  validation:
+    cacheEnabled: true
+    cacheTTL: "10m"
+    cacheSize: 100
+
+# External dependencies
+dependencies:
+  # Redis cache
+  redis:
+    enabled: true
+    architecture: standalone
+    auth:
+      enabled: false
+    master:
+      persistence:
+        enabled: false
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+
+  # DynamoDB Local (for development)
+  dynamodbLocal:
+    enabled: false
+    image:
+      repository: amazon/dynamodb-local
+      tag: "2.0.0"
+    port: 8000
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# External secrets (if using External Secrets Operator)
+externalSecrets:
+  enabled: false
+  secretStore:
+    name: ""
+    kind: SecretStore # or ClusterSecretStore
+  secrets: []
+    # - name: git-credentials
+    #   secretKey: platform/git-token
+    #   target: GIT_TOKEN
+    # - name: aws-credentials
+    #   secretKey: platform/aws-access-key
+    #   target: AWS_ACCESS_KEY_ID
+
+# Network policies
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443 # HTTPS
+        - protocol: TCP
+          port: 53 # DNS
+        - protocol: UDP
+          port: 53 # DNS
+
+# Monitoring
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    annotations: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    scheme: http
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1

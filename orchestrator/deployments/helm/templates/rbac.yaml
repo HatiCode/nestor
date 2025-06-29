@@ -1,0 +1,38 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nestor-orchestrator.fullname" . }}
+  labels:
+    {{- include "nestor-orchestrator.labels" . | nindent 4 }}
+rules:
+  # Read access to nodes for health checking
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # Read access to namespaces for multi-tenancy
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  # Read/write access to configmaps for dynamic config
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+    resourceNames: ["nestor-*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "nestor-orchestrator.fullname" . }}
+  labels:
+    {{- include "nestor-orchestrator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "nestor-orchestrator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nestor-orchestrator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
