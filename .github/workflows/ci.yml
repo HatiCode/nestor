@@ -19,7 +19,6 @@ jobs:
       orchestrator: ${{ steps.changes.outputs.orchestrator }}
       processor: ${{ steps.changes.outputs.processor }}
       shared: ${{ steps.changes.outputs.shared }}
-      docs: ${{ steps.changes.outputs.docs }}
       any-go: ${{ steps.changes.outputs.any-go }}
     steps:
       - uses: actions/checkout@v4
@@ -52,10 +51,6 @@ jobs:
               - 'shared/**'
               - 'go.work'
               - 'go.work.sum'
-            docs:
-              - 'docs/**'
-              - '*.md'
-              - '**/README.md'
             any-go:
               - 'cli/**'
               - 'orchestrator/**'
