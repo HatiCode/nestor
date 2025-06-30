@@ -307,7 +307,7 @@ jobs:
           fi
 
       - name: Build and release with GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: latest

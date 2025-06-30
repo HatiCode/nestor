@@ -72,7 +72,7 @@ jobs:
           zip azure-deployment.zip handler
 
       - name: Create release
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: latest
