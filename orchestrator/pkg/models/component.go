@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/HatiCode/nestor/orchestrator/pkg/json"
+	"github.com/HatiCode/nestor/shared/pkg/json"
 )
 
 type ComponentDefinition struct {
