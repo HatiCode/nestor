@@ -542,20 +542,17 @@ EOF
 
 deps: check-workspace ## Update dependencies for all components
 	@echo "$(BLUE)[INFO]$(NC) Updating dependencies..."
-	@go work sync
-	@for dir in $(CLI_DIR) $(ORCHESTRATOR_DIR) $(PROCESSOR_DIR) $(SHARED_DIR); do \
-		echo "$(BLUE)[INFO]$(NC) Updating dependencies for $dir..."; \
-		cd $dir && go mod tidy && cd ..; \
-	done
+	go work sync
+	go mod download  # This works on all modules in workspace
 	@echo "$(GREEN)[SUCCESS]$(NC) Dependencies updated"
 
 deps-upgrade: check-workspace ## Upgrade dependencies for all components
 	@echo "$(BLUE)[INFO]$(NC) Upgrading dependencies..."
 	@for dir in $(CLI_DIR) $(ORCHESTRATOR_DIR) $(PROCESSOR_DIR) $(SHARED_DIR); do \
-		echo "$(BLUE)[INFO]$(NC) Upgrading dependencies for $dir..."; \
-		cd $dir && go get -u ./... && go mod tidy && cd ..; \
+		echo "$(BLUE)[INFO]$(NC) Upgrading dependencies for $$dir..."; \
+		cd $$dir && go get -u ./... && cd ..; \
 	done
-	@go work sync
+	go work sync
 	@echo "$(GREEN)[SUCCESS]$(NC) Dependencies upgraded"
 
 deps-verify: check-workspace ## Verify dependencies are consistent
