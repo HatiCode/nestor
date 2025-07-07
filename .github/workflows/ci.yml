@@ -186,7 +186,7 @@ jobs:
           CGO_ENABLED: 1 # Required for race detector
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./cli/coverage.out
           flags: cli
@@ -259,7 +259,7 @@ jobs:
           TEST_ENV: ci
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./orchestrator/coverage.out
           flags: orchestrator
@@ -301,7 +301,7 @@ jobs:
           TEST_ENV: ci
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./processor/coverage.out
           flags: processor
@@ -343,7 +343,7 @@ jobs:
           TEST_ENV: ci
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./shared/coverage.out
           flags: shared
