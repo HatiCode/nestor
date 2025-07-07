@@ -343,7 +343,7 @@ jobs:
     steps:
       - name: Update Homebrew formula
         if: needs.validate-release.outputs.is-prerelease == 'false'
-        uses: dawidd6/action-homebrew-bump-formula@v3
+        uses: dawidd6/action-homebrew-bump-formula@v5
         with:
           token: ${{ secrets.HOMEBREW_TOKEN || secrets.GITHUB_TOKEN }}
           formula: nestor-cli
