@@ -151,3 +151,93 @@ func (c *Client) PutItem(ctx context.Context, input *dynamodb.PutItemInput) (*dy
 
 	return c.client.PutItem(timeoutCtx, input)
 }
+
+func (c *Client) Query(ctx context.Context, input *dynamodb.QueryInput) (*dynamodb.QueryOutput, error) {
+	if input.TableName == nil {
+		input.TableName = aws.String(c.tableName)
+	}
+
+	if input.ConsistentRead == nil {
+		input.ConsistentRead = aws.Bool(c.config.ConsistentReads)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.Query(timeoutCtx, input)
+}
+
+func (c *Client) Scan(ctx context.Context, input *dynamodb.ScanInput) (*dynamodb.ScanOutput, error) {
+	if input.TableName == nil {
+		input.TableName = aws.String(c.tableName)
+	}
+
+	if input.ConsistentRead == nil {
+		input.ConsistentRead = aws.Bool(c.config.ConsistentReads)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.Scan(timeoutCtx, input)
+}
+
+func (c *Client) BatchGetItem(ctx context.Context, input *dynamodb.BatchGetItemInput) (*dynamodb.BatchGetItemOutput, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.BatchGetItem(timeoutCtx, input)
+}
+
+func (c *Client) BatchWriteItem(ctx context.Context, input *dynamodb.BatchWriteItemInput) (*dynamodb.BatchWriteItemOutput, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.BatchWriteItem(timeoutCtx, input)
+}
+
+func (c *Client) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	if input.TableName == nil {
+		input.TableName = aws.String(c.tableName)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.UpdateItem(timeoutCtx, input)
+}
+
+func (c *Client) DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput) (*dynamodb.DeleteItemOutput, error) {
+	if input.TableName == nil {
+		input.TableName = aws.String(c.tableName)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
+	defer cancel()
+
+	return c.client.DeleteItem(timeoutCtx, input)
+}
+
+func (c *Client) CreateTable(ctx context.Context, input *dynamodb.CreateTableInput) (*dynamodb.CreateTableOutput, error) {
+	if input.TableName == nil {
+		input.TableName = aws.String(c.tableName)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	return c.client.CreateTable(timeoutCtx, input)
+}
+
+func (c *Client) Close() error {
+	c.logger.Debug("DynamoDB client closed")
+	return nil
+}
+
+func (c *Client) GetMaxBatchSize() int {
+	return c.config.MaxBatchSize
+}
+
+func (c *Client) IsConsistentReads() bool {
+	return c.config.ConsistentReads
+}
