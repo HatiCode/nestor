@@ -1,0 +1,1 @@
+- orchestrator/internal/storage/dynamodb/client.go -> move to aws ResolverEndpointV2
