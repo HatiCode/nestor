@@ -1,6 +1,6 @@
 version: 1
 
-project_name: nestor-processor
+project_name: nestor-composer
 
 before:
   hooks:
@@ -10,9 +10,9 @@ before:
 
 builds:
   # Standard binary builds
-  - id: nestor-processor
+  - id: nestor-composer
     main: .
-    binary: processor
+    binary: composer
     env:
       - CGO_ENABLED=0
     goos:
@@ -23,13 +23,13 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{ .Env.PROCESSOR_VERSION }}
+      - -X main.version={{ .Env.COMPOSER_VERSION }}
       - -X main.commit={{ .Commit }}
       - -X main.date={{ .Date }}
       - -X main.builtBy=goreleaser
 
   # AWS Lambda build
-  - id: nestor-processor-lambda
+  - id: nestor-composer-lambda
     main: .
     binary: bootstrap
     env:
@@ -40,14 +40,14 @@ builds:
       - lambda
     ldflags:
       - -s -w
-      - -X main.version={{ .Env.PROCESSOR_VERSION }}
+      - -X main.version={{ .Env.COMPOSER_VERSION }}
       - -X main.commit={{ .Commit }}
       - -X main.date={{ .Date }}
       - -X main.builtBy=goreleaser
 
 archives:
-  - id: nestor-processor
-    name_template: "nestor-processor_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: nestor-composer
+    name_template: "nestor-composer_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
       - ../LICENSE
@@ -56,8 +56,8 @@ archives:
 
   - id: lambda-deployment
     builds:
-      - nestor-processor-lambda
-    name_template: "nestor-processor-lambda_{{ .Version }}"
+      - nestor-composer-lambda
+    name_template: "nestor-composer-lambda_{{ .Version }}"
     format: zip
     files:
       - README.md
@@ -80,8 +80,8 @@ changelog:
 
 dockers:
   - image_templates:
-      - "ghcr.io/nestor/nestor/processor:{{ .Version }}"
-      - "ghcr.io/nestor/nestor/processor:latest"
+      - "ghcr.io/nestor/nestor/composer:{{ .Version }}"
+      - "ghcr.io/nestor/nestor/composer:latest"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
