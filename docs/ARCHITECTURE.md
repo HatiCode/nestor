@@ -1,437 +1,579 @@
-# Nestor Orchestrator - Architecture & Development Guide
+# Nestor Platform - Architecture & Development Guide
 
-This document defines the architectural decisions, coding philosophy, and project structure for the Nestor Orchestrator component. **Read this first** before making any code changes to ensure consistency with the established patterns.
+This document defines the architectural decisions, coding philosophy, and system design for the Nestor platform. **Read this first** before making any code changes to ensure consistency with the established patterns.
 
-## 🏗️ Architecture Overview
+## 🏗️ System Architecture Overview
 
-The Orchestrator is the central coordination hub that manages a **global component catalog** (the "buffet") containing base infrastructure components. These components are synced to processors where teams compose them into complex deployments.
+Nestor provides a complete platform engineering solution through three core services that work together to enable self-service infrastructure while maintaining platform team control.
 
-### Core Principles
+### Core Design Principles
 
-1. **Global Component Catalog** - No team isolation at the storage level; all components are globally accessible
-2. **Interface-Driven Design** - All external dependencies are behind interfaces for testability and flexibility
-3. **Cache-Transparent Storage** - Caching is handled internally by implementations, not exposed in interfaces
-4. **Validation Before Write** - All validation happens before storage operations, with caching of validation results
-5. **Direct Dependencies Only** - Dependency validation focuses on direct dependencies for performance
-6. **Semantic Versioning** - Components use strict semver with automatic breaking change detection
-7. **Real-time Updates** - Server-Sent Events (SSE) for real-time component synchronization to processors
+1. **Service Separation** - Each service has a single, well-defined responsibility
+2. **Team Autonomy** - Product teams can create abstractions without platform team bottlenecks
+3. **Platform Control** - Infrastructure teams maintain governance and standards
+4. **Multi-Engine Support** - Not locked into any single IaC tool
+5. **API-Driven** - All interactions happen through well-defined APIs
+6. **Event-Driven** - Real-time updates and coordination between services
 
-## 📁 Project Structure
+## 📊 Three-Layer Architecture
 
 ```
-orchestrator/
-├── main.go                           # Application entry point with natural DI
-├── go.mod                           # Module definition
-├── README.md                        # Component documentation
-├── CHANGELOG.md                     # Version history
-│
-├── cmd/                             # Command line interface
-│   ├── root.go                      # Root command setup
-│   ├── serve.go                     # HTTP server command
-│   ├── migrate.go                   # Database migration command
-│   └── version.go                   # Version command
-│
-├── internal/                        # Private implementation (not importable)
-│   ├── config/                      # Configuration management
-│   │   ├── config.go                # Configuration structs and loading
-│   │   └── validation.go            # Config validation
-│   │
-│   ├── api/                         # HTTP API layer
-│   │   ├── server.go                # HTTP server implementation
-│   │   ├── middleware/              # HTTP middleware
-│   │   └── handlers/                # HTTP request handlers
-│   │       ├── catalog.go           # Component catalog endpoints
-│   │       ├── health.go            # Health check endpoints
-│   │       ├── sse.go               # Server-sent events
-│   │       └── version.go           # Version endpoint
-│   │
-│   ├── catalog/                     # Catalog business logic
-│   │   ├── manager.go               # Core catalog management
-│   │   ├── sync.go                  # Git synchronization
-│   │   └── events.go                # Catalog change events
-│   │
-│   ├── storage/                     # Storage layer
-│   │   ├── interfaces.go            # Storage interfaces
-│   │   ├── dynamodb/                # DynamoDB implementation
-│   │   ├── memory/                  # In-memory implementation (testing)
-│   │   └── cache/                   # Caching implementations
-│   │
-│   ├── validation/                  # Component validation
-│   │   ├── interfaces.go            # Validation interfaces
-│   │   ├── validator.go             # Main validator implementation
-│   │   ├── rules/                   # Validation rule implementations
-│   │   └── cache.go                 # Validation result caching
-│   │
-│   ├── engines/                     # Deployment engine management
-│   │   ├── interfaces.go            # Engine interfaces
-│   │   ├── registry.go              # Engine registry implementation
-│   │   ├── health.go                # Engine health checking
-│   │   └── discovery.go             # Engine discovery
-│   │
-│   ├── events/sse/                  # Server-sent events
-│   │   ├── server.go                # SSE server implementation
-│   │   ├── client.go                # SSE client management
-│   │   └── events.go                # Event types and handlers
-│   │
-│   ├── git/                         # Git integration
-│   │   ├── client.go                # Git client wrapper
-│   │   ├── webhook.go               # Git webhook handlers
-│   │   └── parser.go                # Component definition parser
-│   │
-│   └── observability/               # Metrics, logging, tracing
-│       ├── metrics/                 # Prometheus metrics
-│       ├── logging/                 # Structured logging
-│       └── tracing/                 # Distributed tracing
-│
-├── pkg/                            # Public APIs (importable by processors)
-│   ├── json/                       # Centralized JSON configuration
-│   │   └── json.go                 # Optimized jsoniter setup
-│   ├── api/                        # Client libraries
-│   │   ├── client.go               # HTTP API client
-│   │   ├── sse_client.go           # SSE client for processors
-│   │   └── types.go                # Request/response types
-│   ├── models/                     # Data models
-│   │   ├── component.go            # ComponentDefinition model
-│   │   ├── version.go              # Version-related models
-│   │   ├── validation.go           # ValidationResult models
-│   │   └── engine.go               # DeploymentEngine models
-│   ├── errors/                     # Centralized error handling
-│   │   ├── errors.go               # Core error types and builders
-│   │   ├── codes.go                # Error code definitions
-│   │   ├── http.go                 # HTTP error mapping
-│   │   └── validation.go           # Validation-specific errors
-│   └── events/                     # Event definitions for SSE
-│       ├── catalog.go              # Catalog change events
-│       └── types.go                # Event type definitions
-│
-├── configs/                        # Configuration files
-├── deployments/                    # K8s, Docker, Helm manifests
-├── migrations/                     # Database migrations
-├── examples/                       # Sample component definitions
-├── test/                          # Test files and fixtures
-└── docs/                          # Architecture documentation
+┌─────────────────────────────────────────────────────────────────┐
+│                       🖥️  CLI Tool                              │
+│                    Developer Interface                          │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────────┐
+│                   🎵 COMPOSER SERVICE                           │
+│              Team-Specific Resource Composition                 │
+│                                                                 │
+│  • Team abstractions (web-app, data-pipeline)                  │
+│  • Business logic validation                                   │
+│  • API exposure for teams                                      │
+│  • Deployment request coordination                             │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ Deployment Requests
+┌─────────────────────────▼───────────────────────────────────────┐
+│                  🎼 ORCHESTRATOR SERVICE                        │
+│              Deployment Engine & Coordination                   │
+│                                                                 │
+│  • Multi-engine deployment (Crossplane, Pulumi, Terraform)     │
+│  • Complex dependency resolution                               │
+│  • GitOps workflow management                                  │
+│  • Status tracking and rollback                               │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ Resource Lookups
+┌─────────────────────────▼───────────────────────────────────────┐
+│                   📚 CATALOG SERVICE                            │
+│              Infrastructure Resource Definitions                │
+│                                                                 │
+│  • Low-level resource primitives (RDS, S3, VPC)               │
+│  • Versioning and validation                                  │
+│  • Real-time updates via SSE                                  │
+│  • Platform team governance                                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🔧 Coding Philosophy
+## 🎯 Service Responsibilities
 
-### Dependency Injection - Natural Go Patterns
+### 📚 **Catalog Service** - The Foundation
+**Single Responsibility**: Manage the global infrastructure resource catalog
 
-**DO NOT** use dependency injection frameworks. Use Go's natural constructor pattern:
+**Core Functions:**
+- **Resource Definition Storage**: DynamoDB-backed storage for infrastructure primitives
+- **Git Synchronization**: Real-time sync from platform team repositories
+- **Version Management**: Semantic versioning for all resource definitions
+- **Real-time Updates**: Server-Sent Events for live catalog changes
+- **Validation & Governance**: Platform team-controlled resource schemas
+
+**Technology Stack:**
+- **Language**: Go
+- **Storage**: DynamoDB (primary), Redis (cache)
+- **Events**: Server-Sent Events (SSE)
+- **Git Integration**: Multi-repository support with webhooks
+
+**API Patterns:**
+```
+GET    /api/v1/resources                    # List available resources
+GET    /api/v1/resources/{name}             # Get specific resource
+GET    /api/v1/resources/{name}/versions    # List resource versions
+GET    /api/v1/events                       # SSE stream for updates
+```
+
+### 🎼 **Orchestrator Service** - The Engine
+**Single Responsibility**: Coordinate complex deployments across multiple engines
+
+**Core Functions:**
+- **Deployment Coordination**: Route deployments to appropriate engines
+- **Dependency Resolution**: Manage complex resource dependencies
+- **Multi-Engine Support**: Crossplane, Pulumi, Terraform, Helm coordination
+- **GitOps Integration**: Manifest generation and ArgoCD coordination
+- **Status Tracking**: Real-time deployment monitoring and rollback capabilities
+
+**Technology Stack:**
+- **Language**: Go
+- **Engines**: Crossplane, Pulumi, Terraform, Helm
+- **GitOps**: ArgoCD integration
+- **Queue**: Redis-based async processing
+- **State**: External engine state management
+
+**API Patterns:**
+```
+POST   /api/v1/deployments                  # Create deployment
+GET    /api/v1/deployments/{id}             # Get deployment status
+DELETE /api/v1/deployments/{id}             # Cancel/rollback
+GET    /api/v1/engines                      # List available engines
+```
+
+### 🎵 **Composer Service** - The Abstraction Layer
+**Single Responsibility**: Enable teams to create business-focused resource abstractions
+
+**Core Functions:**
+- **Resource Composition**: Combine catalog primitives into team abstractions
+- **Team API Exposure**: Provide team-specific APIs for infrastructure
+- **Business Logic**: Team-specific validation and workflows
+- **Deployment Coordination**: Interface with orchestrator for deployments
+
+**Technology Stack:**
+- **Language**: Go
+- **Storage**: PostgreSQL (team compositions), Redis (cache)
+- **Team Isolation**: Multi-tenant with namespace isolation
+- **API Gateway**: Team-specific API endpoints
+
+**API Patterns:**
+```
+GET    /api/v1/compositions                 # List team compositions
+POST   /api/v1/compositions                 # Create new composition
+POST   /api/v1/deploy                       # Deploy composed resources
+GET    /api/v1/status/{deployment}          # Get deployment status
+```
+
+## 🔄 Data Flow & Interactions
+
+### **Deployment Flow**
+```
+1. Developer updates code with annotations
+   └─ //nestor:web-app size=large replicas=5
+
+2. CLI parses annotations and calls Composer
+   └─ POST /api/v1/deploy {composition: "web-app", params: {...}}
+
+3. Composer resolves composition to catalog resources
+   └─ GET /catalog/api/v1/resources/aws-rds-mysql:1.2.0
+
+4. Composer sends deployment request to Orchestrator
+   └─ POST /orchestrator/api/v1/deployments {...}
+
+5. Orchestrator resolves dependencies and selects engines
+   └─ database (crossplane) → deployment (helm) → load-balancer (terraform)
+
+6. Orchestrator coordinates deployment across engines
+   └─ Creates Crossplane XR → Waits for ready → Creates Helm release
+
+7. Status updates flow back through the chain
+   └─ Engine → Orchestrator → Composer → CLI → Developer
+```
+
+### **Catalog Update Flow**
+```
+1. Platform team commits new resource definition
+   └─ git push origin main
+
+2. Catalog service receives webhook
+   └─ POST /webhooks/git
+
+3. Catalog syncs and validates new resource
+   └─ Parse YAML → Validate schema → Store in DynamoDB
+
+4. Catalog broadcasts update via SSE
+   └─ All connected Composers receive update
+
+5. Composers invalidate cache and fetch new definitions
+   └─ Ensures teams can use latest resources immediately
+```
+
+## 🏛️ Architecture Patterns
+
+### **Service Communication**
+- **Synchronous**: HTTP APIs for request/response patterns
+- **Asynchronous**: SSE for real-time updates, message queues for deployments
+- **Caching**: Redis-based caching at each layer for performance
+- **Circuit Breakers**: Graceful degradation when services are unavailable
+
+### **Data Consistency**
+- **Eventually Consistent**: Catalog updates propagate asynchronously
+- **Strong Consistency**: Deployment operations within orchestrator
+- **Conflict Resolution**: Last-writer-wins for resource definitions
+- **Version Control**: Semantic versioning prevents breaking changes
+
+### **Security & Isolation**
+- **Service-to-Service**: mTLS between all services
+- **Team Isolation**: Namespace-based isolation in composers
+- **RBAC**: Role-based access control at each service layer
+- **Audit Logging**: Complete audit trail for all operations
+
+## 📋 Component Deep Dive
+
+### **CLI Tool**
+```go
+// CLI Architecture
+cmd/
+├── root.go           # Root command and global flags
+├── generate.go       # Parse annotations and create resources
+├── apply.go          # Deploy resources through composer
+├── status.go         # Check deployment status
+└── rollback.go       # Rollback deployments
+
+internal/
+├── annotations/      # Code annotation parsing
+├── composer/         # Composer service client
+└── templates/        # Resource template generation
+```
+
+### **Catalog Service**
+```go
+// Catalog Architecture
+internal/
+├── api/              # HTTP API layer
+│   ├── handlers/     # Resource CRUD endpoints
+│   └── middleware/   # Auth, CORS, rate limiting
+├── storage/          # Storage abstraction layer
+│   ├── dynamodb/     # DynamoDB implementation
+│   └── cache/        # Redis caching layer
+├── git/              # Git integration
+│   ├── sync.go       # Repository synchronization
+│   ├── webhook.go    # Git webhook handlers
+│   └── parser.go     # YAML resource parsing
+├── events/           # Real-time event system
+│   ├── sse.go        # Server-Sent Events
+│   └── broadcaster.go # Event broadcasting
+└── validation/       # Resource validation
+    ├── schema.go     # Schema validation
+    └── policies.go   # Policy enforcement
+```
+
+**Key Design Decisions:**
+- **Read-Heavy Optimization**: Aggressive caching, optimized for high read throughput
+- **Git as Source of Truth**: All resources defined in Git, synced to database
+- **Schema Validation**: Platform teams control resource schemas
+- **Real-time Updates**: SSE ensures all services get immediate updates
+
+### **Orchestrator Service**
+```go
+// Orchestrator Architecture
+internal/
+├── api/              # HTTP API layer
+│   └── handlers/     # Deployment endpoints
+├── deployment/       # Core deployment logic
+│   ├── coordinator.go # Main coordination logic
+│   ├── dependency.go # Dependency resolution
+│   ├── queue.go      # Async deployment queue
+│   └── status.go     # Status aggregation
+├── engines/          # Engine abstraction
+│   ├── interfaces.go # Engine interface definitions
+│   ├── registry.go   # Engine registry
+│   ├── crossplane/   # Crossplane engine
+│   ├── pulumi/       # Pulumi engine
+│   ├── terraform/    # Terraform engine
+│   └── helm/         # Helm engine
+├── catalog/          # Catalog service client
+│   ├── client.go     # HTTP client for catalog
+│   └── cache.go      # Local resource caching
+└── gitops/           # GitOps integration
+    ├── manager.go    # Git repository management
+    ├── argocd.go     # ArgoCD integration
+    └── manifest.go   # Manifest generation
+```
+
+**Key Design Decisions:**
+- **Stateless Design**: All state managed by engines or external stores
+- **Plugin Architecture**: Easy to add new deployment engines
+- **Dependency Resolution**: Complex dependency graphs with cycle detection
+- **Engine Abstraction**: Uniform interface across different IaC tools
+
+### **Composer Service**
+```go
+// Composer Architecture
+internal/
+├── api/              # HTTP API layer
+│   ├── handlers/     # Team-specific endpoints
+│   └── team/         # Team isolation middleware
+├── composition/      # Resource composition logic
+│   ├── resolver.go   # Resolve compositions to resources
+│   ├── validator.go  # Business logic validation
+│   └── template.go   # Template rendering
+├── catalog/          # Catalog service client
+│   ├── client.go     # Catalog API client
+│   └── cache.go      # Local catalog caching
+├── orchestrator/     # Orchestrator service client
+│   ├── client.go     # Orchestrator API client
+│   └── deploy.go     # Deployment coordination
+└── storage/          # Team composition storage
+    ├── postgres/     # PostgreSQL for compositions
+    └── cache/        # Redis for performance
+```
+
+**Key Design Decisions:**
+- **Team Isolation**: Each team gets isolated namespace and resources
+- **Business Logic Layer**: Team-specific validation and workflows
+- **Composition Engine**: Combine catalog primitives into abstractions
+- **API Gateway Pattern**: Team-specific API endpoints and authentication
+```
+
+## 🔧 Development Philosophy
+
+### **Interface-Driven Design**
+All services follow strict interface patterns for external dependencies:
 
 ```go
-// ✅ Good - Natural Go constructor pattern
-func NewCatalogManager(
-    store storage.CatalogStore,
-    validator validation.ComponentValidator,
-    logger logging.Logger,
-) *CatalogManager {
-    return &CatalogManager{
-        store:     store,
-        validator: validator,
-        logger:    logger,
-    }
+// Example: Catalog service interfaces
+type ResourceStore interface {
+    GetResource(ctx context.Context, name, version string) (*Resource, error)
+    ListResources(ctx context.Context, filters *Filters) ([]*Resource, error)
+    CreateResource(ctx context.Context, resource *Resource) error
 }
 
-// ✅ Good - Wire dependencies in main.go
-func main() {
-    logger := logging.New(config.Log)
-    cache := cache.NewRedisClient(config.Cache, logger)
-    store := dynamodb.NewCatalogStore(config.DB, cache, logger)
-    validator := validation.NewValidator(store, logger)
-    manager := catalog.NewManager(store, validator, logger)
-
-    server := api.NewServer(manager, logger)
-    server.Start()
+type EventBroadcaster interface {
+    Broadcast(ctx context.Context, event *Event) error
+    Subscribe(ctx context.Context, filters *EventFilters) (<-chan *Event, error)
 }
 
-// ❌ Bad - Don't use DI frameworks or containers
+// Implementations are pluggable
+func NewCatalogService(store ResourceStore, broadcaster EventBroadcaster) *CatalogService
 ```
 
-### Interface Design - Follow SOLID Principles
-
-**Interface Segregation**: Split large interfaces into focused, single-responsibility interfaces:
-
-```go
-// ✅ Good - Small, focused interfaces
-type ComponentReader interface {
-    GetComponent(ctx context.Context, name, version string) (*ComponentDefinition, error)
-    ListComponents(ctx context.Context, req *ListComponentsRequest) (*ListComponentsResponse, error)
-}
-
-type ComponentWriter interface {
-    CreateComponent(ctx context.Context, component *ComponentDefinition) error
-    UpdateComponent(ctx context.Context, component *ComponentDefinition) error
-}
-
-// Combine them in the main interface
-type CatalogStore interface {
-    ComponentReader
-    ComponentWriter
-    ComponentValidator
-}
-
-// ❌ Bad - Monolithic interfaces with unrelated methods
-```
-
-### Error Handling - Centralized and Structured
-
-**Always use the centralized error package** for consistent error handling:
+### **Error Handling Strategy**
+Centralized error handling with rich context:
 
 ```go
-// ✅ Good - Rich, structured errors
-return errors.New(errors.ErrorCodeComponentNotFound).
-    Component("catalog").
-    Operation("GetComponent").
-    Message("component not found").
-    Detail("component_name", name).
+// Use shared error package across all services
+return errors.New(errors.ErrorCodeResourceNotFound).
+    Service("catalog").
+    Operation("GetResource").
+    Message("resource not found").
+    Detail("resource_name", name).
     Detail("version", version).
     Build()
-
-// ✅ Good - Wrap external errors
-dbErr := db.GetItem(...)
-if dbErr != nil {
-    return errors.StorageFailure("catalog", "GetComponent", dbErr)
-}
-
-// ❌ Bad - Generic errors without context
-return fmt.Errorf("component not found")
 ```
 
-### Validation Strategy - Validate Before Write
+### **Configuration Management**
+Environment-specific configuration with validation:
 
-**All write operations MUST validate before storage**:
+```yaml
+# Each service follows consistent config patterns
+service:
+  name: "catalog"
+  port: 8080
 
+storage:
+  type: "dynamodb"
+  dynamodb:
+    table_name: "nestor-catalog"
+    region: "us-west-2"
+
+cache:
+  type: "redis"
+  redis:
+    url: "redis://localhost:6379"
+    ttl: "5m"
+```
+
+## 🚀 Deployment Patterns
+
+### **Service Deployment**
+Each service deploys independently with Helm charts:
+
+```bash
+# Deploy catalog service
+helm install nestor-catalog deployments/helm/catalog \
+  --set config.storage.dynamodb.table_name=nestor-catalog-prod
+
+# Deploy orchestrator service
+helm install nestor-orchestrator deployments/helm/orchestrator \
+  --set config.catalog.endpoint=https://catalog.nestor.svc.cluster.local
+
+# Deploy composer per team
+helm install team-alpha-composer deployments/helm/composer \
+  --set team.name=alpha \
+  --set team.namespace=team-alpha
+```
+
+### **Development Environment**
+Local development with docker-compose:
+
+```yaml
+# docker-compose.yml
+services:
+  catalog:
+    build: ./catalog
+    ports: ["8080:8080"]
+    depends_on: [dynamodb, redis]
+
+  orchestrator:
+    build: ./orchestrator
+    ports: ["8081:8080"]
+    depends_on: [catalog, redis]
+
+  composer-alpha:
+    build: ./composer
+    ports: ["8082:8080"]
+    environment:
+      - TEAM_NAME=alpha
+    depends_on: [catalog, orchestrator]
+```
+
+## 📊 Data Models
+
+### **Catalog Resources**
 ```go
-// ✅ Good - Validation before write with caching
-func (c *catalogStore) CreateComponent(ctx context.Context, component *ComponentDefinition) error {
-    // 1. Check validation cache
-    if cached := c.validator.GetCachedValidation(ctx, component.Name, component.Version); cached != nil {
-        if !cached.Valid {
-            return errors.ValidationFailed("catalog", "CreateComponent", cached.Errors)
-        }
-    } else {
-        // 2. Run validation
-        result, err := c.validator.ValidateComponent(ctx, component)
-        if err != nil {
-            return err
-        }
+type ResourceDefinition struct {
+    Metadata ResourceMetadata `json:"metadata"`
+    Spec     ResourceSpec     `json:"spec"`
+    Status   ResourceStatus   `json:"status"`
+}
 
-        // 3. Cache result
-        c.validator.CacheValidationResult(ctx, component.Name, component.Version, result)
-
-        if !result.Valid {
-            return errors.ValidationFailed("catalog", "CreateComponent", result.Errors)
-        }
-    }
-
-    // 4. Write only if validation passes
-    return c.storage.CreateComponent(ctx, component)
+type ResourceMetadata struct {
+    Name         string            `json:"name"`
+    Version      string            `json:"version"`
+    Provider     string            `json:"provider"`     // aws, gcp, azure
+    Category     string            `json:"category"`     // database, compute, storage
+    ResourceType string            `json:"resource_type"` // mysql, redis, s3
+    Labels       map[string]string `json:"labels"`
 }
 ```
 
-### Caching Strategy - Transparent to Interfaces
-
-**Caching should be handled internally by implementations**:
-
+### **Deployment Requests**
 ```go
-// ✅ Good - Cache-transparent interface
-type CatalogStore interface {
-    GetComponent(ctx context.Context, name, version string) (*ComponentDefinition, error)
+type DeploymentRequest struct {
+    ID          string               `json:"id"`
+    Team        string               `json:"team"`
+    Resources   []ResourceInstance   `json:"resources"`
+    Dependencies []Dependency        `json:"dependencies"`
+    Environment string              `json:"environment"`
 }
 
-// ✅ Good - Implementation handles caching internally
-func (s *dynamodbStore) GetComponent(ctx context.Context, name, version string) (*ComponentDefinition, error) {
-    key := fmt.Sprintf("%s:%s", name, version)
-
-    // Check cache first
-    if cached := s.cache.Get(key); cached != nil {
-        return cached.(*ComponentDefinition), nil
-    }
-
-    // Fallback to storage
-    component, err := s.db.GetItem(...)
-    if err == nil {
-        s.cache.Set(key, component, 5*time.Minute)
-    }
-    return component, err
-}
-
-// ❌ Bad - Cache-aware interface
-type CatalogStore interface {
-    GetComponent(ctx context.Context, name, version string, opts *CacheOptions) (*ComponentDefinition, error)
+type ResourceInstance struct {
+    Name       string                 `json:"name"`
+    CatalogRef string                 `json:"catalog_ref"` // "aws-rds-mysql:1.2.0"
+    Config     map[string]interface{} `json:"config"`
+    Engine     string                 `json:"engine"`      // "crossplane"
 }
 ```
 
-### JSON Configuration - Centralized Performance Optimization
+### **Team Compositions**
+```go
+type ComposedResource struct {
+    Metadata CompositionMetadata `json:"metadata"`
+    Spec     CompositionSpec     `json:"spec"`
+}
 
-**All JSON operations use the optimized pkg/json package**:
+type CompositionSpec struct {
+    Description string             `json:"description"`
+    Resources   []ComposedInstance `json:"resources"`
+    Parameters  []Parameter        `json:"parameters"`
+    Dependencies []Dependency      `json:"dependencies"`
+}
+```
+
+## 🔍 Observability Strategy
+
+### **Metrics Collection**
+Each service exposes Prometheus metrics:
 
 ```go
-// ✅ Good - Centralized JSON configuration
-import "github.com/HatiCode/nestor/orchestrator/pkg/json"
+// Service-specific metrics
+var (
+    resourcesServed = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "catalog_resources_served_total",
+            Help: "Total number of resources served",
+        },
+        []string{"resource_type", "version"},
+    )
 
-// In API handlers
-func (h *Handler) ListComponents(w http.ResponseWriter, r *http.Request) {
-    data, err := json.Marshal(components)
+    deploymentDuration = prometheus.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name: "orchestrator_deployment_duration_seconds",
+            Help: "Deployment duration in seconds",
+        },
+        []string{"engine", "status"},
+    )
+)
+```
+
+### **Distributed Tracing**
+OpenTelemetry integration across all services:
+
+```go
+// Trace requests across service boundaries
+func (h *Handler) HandleDeployment(w http.ResponseWriter, r *http.Request) {
+    ctx, span := tracer.Start(r.Context(), "handle_deployment")
+    defer span.End()
+
+    // Trace propagates to downstream services
+    deployment, err := h.orchestrator.Deploy(ctx, request)
     if err != nil {
-        return errors.Internal("failed to marshal components", err)
+        span.SetStatus(codes.Error, err.Error())
+        return
     }
-    w.Header().Set("Content-Type", "application/json")
-    w.Write(data)
 }
-
-// In models
-func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
-    type Alias ComponentDefinition
-    return json.Marshal(&struct {
-        *Alias
-        ID string `json:"id"`
-    }{
-        Alias: (*Alias)(c),
-        ID:    c.GetID(),
-    })
-}
-
-// ❌ Bad - Direct encoding/json usage
-import "encoding/json"
-data, err := json.Marshal(component) // Don't use standard library directly
 ```
 
-**Performance Benefits:**
-- **API responses**: 2-3x faster component serialization
-- **SSE events**: Real-time updates with lower latency
-- **Storage operations**: Efficient DynamoDB attribute marshaling
-- **Memory efficiency**: 30-50% fewer allocations
-
-## 🎯 Component Architecture Decisions
-
-### Catalog Store Interface
-
-The main storage interface is split into focused sub-interfaces:
-
-- **ComponentReader**: Read operations (GetComponent, ListComponents, etc.)
-- **ComponentWriter**: Write operations (CreateComponent, UpdateComponent, etc.)
-- **ComponentSearcher**: Search and discovery operations
-- **ComponentVersioning**: Version management and history
-- **ComponentValidator**: Business logic validation
-
-### Validation Rules
-
-1. **Semantic Versioning**: Enforce semver rules and detect breaking changes
-2. **Dependency Validation**: Check direct dependencies only (not transitive)
-3. **Engine Validation**: Verify deployment engines exist and are healthy
-4. **Conflict Detection**: Prevent naming and resource type conflicts
-5. **Input/Output Validation**: Ensure component interfaces are well-defined
-
-### Component Metadata
-
-Components include rich metadata for discovery and validation:
+### **Structured Logging**
+Consistent logging across all services:
 
 ```go
-type ComponentMetadata struct {
-    // Identity
-    Name         string `json:"name"`
-    Version      string `json:"version"`      // semantic version
-    Description  string `json:"description"`
-
-    // Classification
-    Provider     string `json:"provider"`     // aws, gcp, azure, k8s
-    Category     string `json:"category"`     // database, compute, storage
-    ResourceType string `json:"resource_type"` // mysql, postgresql, redis
-
-    // Deployment
-    DeploymentEngines []string `json:"deployment_engines"` // crossplane, pulumi, terraform
-
-    // Dependencies (direct only)
-    Dependencies []Dependency `json:"dependencies"`
-
-    // Configuration
-    RequiredInputs []InputSpec `json:"required_inputs"`
-    OptionalInputs []InputSpec `json:"optional_inputs"`
-    Outputs        []OutputSpec `json:"outputs"`
-
-    // Operational
-    Maturity       MaturityLevel `json:"maturity"`        // alpha, beta, stable
-    SupportLevel   SupportLevel  `json:"support_level"`   // community, supported
-    ResourceLimits ResourceLimits `json:"resource_limits"` // cpu, memory estimates
-
-    // Git source tracking
-    GitRepository string `json:"git_repository"`
-    GitCommit     string `json:"git_commit"`
-    GitPath       string `json:"git_path"`
-
-    // Flexible metadata
-    Labels      map[string]string `json:"labels"`
-    Annotations map[string]string `json:"annotations"`
-}
+logger.InfoContext(ctx, "deployment started",
+    "deployment_id", req.ID,
+    "team", req.Team,
+    "resource_count", len(req.Resources),
+    "environment", req.Environment,
+)
 ```
 
-## 🔍 Query Patterns
+## 🛡️ Security Architecture
 
-The storage layer is optimized for these primary query patterns:
+### **Service-to-Service Communication**
+- **mTLS**: All internal service communication uses mutual TLS
+- **API Keys**: Service authentication via rotating API keys
+- **Network Policies**: Kubernetes network policies for traffic control
 
-1. **Component Lookup**: `GetComponent(name, version)` - Most frequent operation
-2. **Latest Version**: `GetLatestComponent(name)` - Common for dependency resolution
-3. **Component Discovery**: `ListComponents()` with filtering by provider/category
-4. **Search**: `SearchComponents(query)` - Text search across names/descriptions
-5. **Dependency Queries**: `FindDependencies(name, version)` - Direct dependencies only
-6. **Version History**: `GetComponentVersions(name)` - All versions of a component
+### **Team Isolation**
+- **Namespace Isolation**: Each team operates in isolated namespaces
+- **RBAC**: Role-based access control at service and resource levels
+- **Resource Quotas**: Prevent resource exhaustion by teams
 
-## 🚀 Development Workflow
+### **Audit & Compliance**
+- **Audit Logs**: All operations logged with full context
+- **Change Tracking**: Git-based change tracking for all resources
+- **Compliance Checks**: Automated policy validation
 
-### Adding New Features
+## 🎯 Scalability Considerations
 
-1. **Define interfaces first** in the appropriate `interfaces.go` file
-2. **Create models** in `pkg/models/` if needed for external consumption
-3. **Implement business logic** in the internal packages
-4. **Add validation rules** if the feature affects component validation
-5. **Update error codes** in `pkg/errors/` if new error types are needed
-6. **Write tests** with mocked dependencies
-7. **Update API handlers** to expose the functionality
+### **Horizontal Scaling**
+- **Stateless Services**: All services designed for horizontal scaling
+- **Load Balancing**: Service mesh for intelligent traffic routing
+- **Auto-scaling**: HPA based on metrics and queue depth
 
-### Testing Strategy
+### **Performance Optimization**
+- **Caching Strategy**: Multi-layer caching (Redis, in-memory, CDN)
+- **Database Optimization**: Read replicas, connection pooling
+- **Async Processing**: Queue-based processing for heavy operations
 
-- **Unit tests**: Mock all dependencies using interfaces
-- **Integration tests**: Use in-memory implementations for storage
-- **Component tests**: Test full request/response cycles
-- **Contract tests**: Ensure interfaces are properly implemented
+### **Multi-Region Support**
+- **Catalog Replication**: Global catalog with regional caches
+- **Engine Distribution**: Deploy engines close to target resources
+- **Cross-Region Dependencies**: Handle cross-region resource dependencies
 
-### File Naming Conventions
+## 🔄 Migration & Evolution
 
-- `interfaces.go` - Interface definitions for each package
-- `<domain>.go` - Main implementation (e.g., `catalog.go`, `validator.go`)
-- `<domain>_test.go` - Unit tests
-- `models.go` - Package-specific data structures
-- `errors.go` - Package-specific error definitions (if needed)
+### **Service Evolution**
+- **API Versioning**: Semantic versioning for all service APIs
+- **Backward Compatibility**: Maintain compatibility across versions
+- **Feature Flags**: Safe feature rollout and rollback
 
-## 🎯 Key Design Goals
+### **Data Migration**
+- **Schema Evolution**: Database schema migration strategies
+- **Zero-Downtime**: Rolling updates with backward compatibility
+- **Rollback Procedures**: Safe rollback for failed migrations
 
-1. **Scalability**: Read-heavy workload optimization with caching
-2. **Reliability**: Comprehensive validation and error handling
-3. **Maintainability**: Clean interfaces and separation of concerns
-4. **Testability**: Mockable interfaces and dependency injection
-5. **Observability**: Structured logging, metrics, and tracing throughout
-6. **Performance**: Efficient query patterns and caching strategies
+## 🎯 Success Metrics
 
-## 🚫 What NOT to Do
+### **Platform Health**
+- **Service Availability**: 99.9% uptime for all core services
+- **API Response Times**: <100ms for read operations, <500ms for writes
+- **Deployment Success Rate**: >95% success rate for deployments
 
-1. **Don't use DI frameworks** - Use natural Go constructor patterns
-2. **Don't create monolithic interfaces** - Keep interfaces focused and small
-3. **Don't validate transitive dependencies** - Only direct dependencies for performance
-4. **Don't expose caching in interfaces** - Keep caching transparent to consumers
-5. **Don't create team isolation** - The catalog is global to all teams
-6. **Don't use schema validation** - Focus on business logic validation only
-7. **Don't couple packages tightly** - Use interfaces for all cross-package dependencies
-8. **Don't use encoding/json directly** - Always use pkg/json for consistent performance
-9. **Don't mix storage and business logic** - Keep internal/storage pure, business logic in internal/catalog
+### **Team Productivity**
+- **Self-Service Adoption**: % of infrastructure requests via self-service
+- **Time to Provision**: Average time from request to ready resources
+- **Developer Satisfaction**: Regular surveys and feedback collection
 
-## 📚 References
-
-- [SOLID Principles in Go](https://dave.cheney.net/2016/08/20/solid-go-design)
-- [Go Project Structure](https://github.com/golang-standards/project-layout)
-- [Semantic Versioning](https://semver.org/)
-- [Effective Go](https://golang.org/doc/effective_go.html)
+### **Platform Efficiency**
+- **Resource Utilization**: Optimize cost through right-sizing
+- **Operational Overhead**: Reduce manual intervention requirements
+- **Compliance**: Automated policy compliance across all resources
 
 ---
 
-**This document should be updated whenever architectural decisions change. All team members should be familiar with these patterns before contributing to the codebase.**
+**This architecture enables true platform-as-a-product delivery - providing teams with self-service capabilities while maintaining the governance and control that platform teams need.**

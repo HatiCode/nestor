@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/HatiCode/nestor/shared/pkg/json"
@@ -184,12 +185,7 @@ func (c *ComponentDefinition) IsStable() bool {
 }
 
 func (c *ComponentDefinition) SupportsEngine(engine string) bool {
-	for _, e := range c.Metadata.DeploymentEngines {
-		if e == engine {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Metadata.DeploymentEngines, engine)
 }
 
 func (c *ComponentDefinition) GetEngineSpec(engine string) (*EngineSpec, bool) {
