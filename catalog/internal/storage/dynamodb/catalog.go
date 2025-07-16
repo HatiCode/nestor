@@ -2,7 +2,9 @@ package dynamodb
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,33 +14,29 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/HatiCode/nestor/catalog/internal/storage"
+	"github.com/HatiCode/nestor/catalog/pkg/cache"
 	"github.com/HatiCode/nestor/catalog/pkg/models"
+	"github.com/HatiCode/nestor/shared/pkg/json"
 	"github.com/HatiCode/nestor/shared/pkg/logging"
 )
 
-// catalogStore implements the storage.CatalogStore interface using DynamoDB
-// Following Single Responsibility Principle - focused only on DynamoDB storage operations
 type catalogStore struct {
 	client    *Client
-	cache     storage.Cache
+	cache     cache.Cache
 	logger    logging.Logger
 	tableName string
 	config    *Config
 }
 
-// NewCatalogStore creates a new DynamoDB-backed catalog store
-// Uses the existing config.go structure and follows Dependency Inversion Principle
-func NewCatalogStore(config *Config, cache storage.Cache, logger logging.Logger) (storage.CatalogStore, error) {
+func NewCatalogStore(config *Config, cache cache.Cache, logger logging.Logger) (storage.CatalogStore, error) {
 	if config == nil {
 		return nil, fmt.Errorf("DynamoDB config is required")
 	}
 
-	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid DynamoDB config: %w", err)
 	}
 
-	// Create DynamoDB client
 	client, err := NewClient(config, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DynamoDB client: %w", err)
@@ -52,7 +50,6 @@ func NewCatalogStore(config *Config, cache storage.Cache, logger logging.Logger)
 		config:    config,
 	}
 
-	// Create table if auto-create is enabled
 	if config.AutoCreateTable {
 		if err := store.ensureTable(context.Background()); err != nil {
 			return nil, fmt.Errorf("failed to ensure table exists: %w", err)
@@ -62,13 +59,10 @@ func NewCatalogStore(config *Config, cache storage.Cache, logger logging.Logger)
 	return store, nil
 }
 
-// Component Reader Operations
-
-// GetComponent retrieves a specific component version
+// GetComponent retrieves a specific component by name and version
 func (s *catalogStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
 	s.logger.DebugContext(ctx, "getting component", "name", name, "version", version)
 
-	// Check cache first
 	if s.cache != nil {
 		cacheKey := s.buildComponentCacheKey(name, version)
 		if cached := s.cache.Get(ctx, cacheKey); cached != nil {
@@ -147,7 +141,7 @@ func (s *catalogStore) GetLatestComponent(ctx context.Context, name string) (*mo
 			":sk_prefix": &types.AttributeValueMemberS{Value: "VERSION#"},
 		},
 		ScanIndexForward: aws.Bool(false), // Sort descending to get latest first
-		Limit:           aws.Int32(1),
+		Limit:            aws.Int32(1),
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to query latest component version", "name", name, "error", err)
@@ -255,38 +249,45 @@ func (s *catalogStore) ListComponents(ctx context.Context, req *storage.ListComp
 	return response, nil
 }
 
-// BatchGetComponents retrieves multiple components efficiently
-func (s *catalogStore) BatchGetComponents(ctx context.Context, refs []storage.ComponentRef) ([]*models.ComponentDefinition, error) {
-	if len(refs) == 0 {
-		return nil, nil
+// GetComponentVersions gets all versions of a component
+func (s *catalogStore) GetComponentVersions(ctx context.Context, name string) ([]*models.ComponentVersion, error) {
+	s.logger.DebugContext(ctx, "getting component versions", "name", name)
+
+	// Query all versions for this component
+	result, err := s.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(s.tableName),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk_prefix)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":        &types.AttributeValueMemberS{Value: s.buildComponentPK(name)},
+			":sk_prefix": &types.AttributeValueMemberS{Value: "VERSION#"},
+		},
+		ScanIndexForward: aws.Bool(false), // Sort descending (latest first)
+	})
+	if err != nil {
+		return nil, s.wrapDynamoDBError(err, "GetComponentVersions")
 	}
 
-	s.logger.DebugContext(ctx, "batch getting components", "count", len(refs))
-
-	// DynamoDB batch get has a limit of 100 items
-	const batchSize = 100
-	var allComponents []*models.ComponentDefinition
-
-	for i := 0; i < len(refs); i += batchSize {
-		end := i + batchSize
-		if end > len(refs) {
-			end = len(refs)
+	versions := make([]*models.ComponentVersion, 0, len(result.Items))
+	for _, item := range result.Items {
+		var dbItem ComponentItem
+		if err := attributevalue.UnmarshalMap(item, &dbItem); err != nil {
+			s.logger.WarnContext(ctx, "failed to unmarshal component version", "error", err)
+			continue
 		}
 
-		batch := refs[i:end]
-		components, err := s.batchGetComponentsBatch(ctx, batch)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get batch %d-%d: %w", i, end, err)
+		// Convert ComponentDefinition to ComponentVersion
+		component := dbItem.ToComponentDefinition()
+		version := &models.ComponentVersion{
+			ComponentName: component.Metadata.Name,
+			Version:       component.Metadata.Version,
+			CreatedAt:     component.Metadata.CreatedAt,
+			Status:        models.VersionStatusActive, // Simplified
 		}
-
-		allComponents = append(allComponents, components...)
+		versions = append(versions, version)
 	}
 
-	s.logger.DebugContext(ctx, "batch got components", "requested", len(refs), "retrieved", len(allComponents))
-	return allComponents, nil
+	return versions, nil
 }
-
-// Component Writer Operations
 
 // CreateComponent creates a new component version
 func (s *catalogStore) CreateComponent(ctx context.Context, component *models.ComponentDefinition) error {
@@ -376,8 +377,8 @@ func (s *catalogStore) UpdateComponent(ctx context.Context, component *models.Co
 }
 
 // DeleteComponent deletes a component version
-func (s *catalogStore) DeleteComponent(ctx context.Context, name, version string) error {
-	s.logger.InfoContext(ctx, "deleting component", "name", name, "version", version)
+func (s *catalogStore) DeleteComponent(ctx context.Context, name, version string, reason string) error {
+	s.logger.InfoContext(ctx, "deleting component", "name", name, "version", version, "reason", reason)
 
 	_, err := s.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.tableName),
@@ -397,6 +398,11 @@ func (s *catalogStore) DeleteComponent(ctx context.Context, name, version string
 
 	s.logger.InfoContext(ctx, "component deleted successfully", "name", name, "version", version)
 	return nil
+}
+
+// DeleteComponentVersion is an alias for DeleteComponent for compatibility
+func (s *catalogStore) DeleteComponentVersion(ctx context.Context, name, version string, reason string) error {
+	return s.DeleteComponent(ctx, name, version, reason)
 }
 
 // BatchCreateComponents creates multiple components efficiently
@@ -442,7 +448,13 @@ func (s *catalogStore) BatchCreateComponents(ctx context.Context, components []*
 	return nil
 }
 
-// Component Search Operations
+func (s *catalogStore) BatchGetComponents(ctx context.Context, components []storage.ComponentRef) ([]*models.ComponentDefinition, error) {
+	if len(components) == 0 {
+		return nil, nil
+	}
+
+	return nil, nil
+}
 
 // SearchComponents performs component search
 func (s *catalogStore) SearchComponents(ctx context.Context, req *storage.SearchComponentsRequest) (*storage.SearchComponentsResponse, error) {
@@ -455,7 +467,6 @@ func (s *catalogStore) SearchComponents(ctx context.Context, req *storage.Search
 	start := time.Now()
 
 	// For simplicity, we'll use scan with filter expressions
-	// In production, you might want to use DynamoDB search capabilities or external search
 	scanInput := s.buildSearchScanInput(req)
 
 	result, err := s.client.Scan(ctx, scanInput)
@@ -483,17 +494,14 @@ func (s *catalogStore) SearchComponents(ctx context.Context, req *storage.Search
 
 	// Handle pagination
 	var nextToken string
-	hasMore := false
 	if result.LastEvaluatedKey != nil {
 		nextToken = s.encodeToken(result.LastEvaluatedKey)
-		hasMore = true
 	}
 
 	response := &storage.SearchComponentsResponse{
 		Components: components,
 		NextToken:  nextToken,
 		Total:      int64(len(components)),
-		HasMore:    hasMore,
 		QueryTime:  queryTime,
 		Facets:     make(map[string]*storage.FacetResult), // TODO: Implement faceting
 	}
@@ -508,7 +516,6 @@ func (s *catalogStore) SearchComponents(ctx context.Context, req *storage.Search
 func (s *catalogStore) FindComponentsByProvider(ctx context.Context, provider string) ([]*models.ComponentDefinition, error) {
 	s.logger.DebugContext(ctx, "finding components by provider", "provider", provider)
 
-	// Use GSI if available, otherwise scan with filter
 	scanInput := &dynamodb.ScanInput{
 		TableName:        aws.String(s.tableName),
 		FilterExpression: aws.String("Provider = :provider"),
@@ -569,8 +576,6 @@ func (s *catalogStore) FindComponentsByCategory(ctx context.Context, category st
 func (s *catalogStore) FindComponentsByLabels(ctx context.Context, labels map[string]string) ([]*models.ComponentDefinition, error) {
 	s.logger.DebugContext(ctx, "finding components by labels", "label_count", len(labels))
 
-	// This is simplified - in production you might want a more efficient approach
-	// using GSI or denormalized label data
 	scanInput := &dynamodb.ScanInput{
 		TableName: aws.String(s.tableName),
 	}
@@ -600,7 +605,6 @@ func (s *catalogStore) FindComponentsByLabels(ctx context.Context, labels map[st
 func (s *catalogStore) FindDependents(ctx context.Context, componentName string) ([]*models.ComponentDefinition, error) {
 	s.logger.DebugContext(ctx, "finding dependents", "component", componentName)
 
-	// This requires scanning and checking dependencies - could be optimized with GSI
 	scanInput := &dynamodb.ScanInput{
 		TableName: aws.String(s.tableName),
 	}
@@ -642,16 +646,15 @@ func (s *catalogStore) FindDependencies(ctx context.Context, componentName, vers
 	seen := make(map[string]bool)
 
 	for _, dep := range component.Spec.Dependencies {
-		// Parse dependency name and version
 		depName := dep.Name
-		depVersion := dep.Version // This might be a constraint, would need resolution
+		depVersion := dep.Version // Simplified - should resolve version constraint
 
 		if seen[depName] {
 			continue
 		}
 		seen[depName] = true
 
-		depComponent, err := s.GetLatestComponent(ctx, depName) // Simplified - should resolve version constraint
+		depComponent, err := s.GetLatestComponent(ctx, depName)
 		if err != nil {
 			s.logger.WarnContext(ctx, "failed to get dependency", "dependency", depName, "error", err)
 			continue
@@ -679,61 +682,15 @@ func (s *catalogStore) FindDependencies(ctx context.Context, componentName, vers
 	return dependencies, nil
 }
 
-// Component Versioning Operations - placeholder implementations
-
-// CreateComponentVersion creates a component version record
+// Placeholder implementations for versioning operations
 func (s *catalogStore) CreateComponentVersion(ctx context.Context, version *models.ComponentVersion) error {
-	// TODO: Implement version tracking
 	return fmt.Errorf("CreateComponentVersion not yet implemented")
 }
 
-// GetComponentVersion gets a specific component version record
 func (s *catalogStore) GetComponentVersion(ctx context.Context, name, version string) (*models.ComponentVersion, error) {
-	// TODO: Implement version tracking
 	return nil, fmt.Errorf("GetComponentVersion not yet implemented")
 }
 
-// GetComponentVersions gets all versions of a component
-func (s *catalogStore) GetComponentVersions(ctx context.Context, name string) ([]*models.ComponentVersion, error) {
-	s.logger.DebugContext(ctx, "getting component versions", "name", name)
-
-	// Query all versions for this component
-	result, err := s.client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String(s.tableName),
-		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk_prefix)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pk":        &types.AttributeValueMemberS{Value: s.buildComponentPK(name)},
-			":sk_prefix": &types.AttributeValueMemberS{Value: "VERSION#"},
-		},
-		ScanIndexForward: aws.Bool(false), // Sort descending (latest first)
-	})
-	if err != nil {
-		return nil, s.wrapDynamoDBError(err, "GetComponentVersions")
-	}
-
-	versions := make([]*models.ComponentVersion, 0, len(result.Items))
-	for _, item := range result.Items {
-		var dbItem ComponentItem
-		if err := attributevalue.UnmarshalMap(item, &dbItem); err != nil {
-			s.logger.WarnContext(ctx, "failed to unmarshal component version", "error", err)
-			continue
-		}
-
-		// Convert ComponentDefinition to ComponentVersion
-		component := dbItem.ToComponentDefinition()
-		version := &models.ComponentVersion{
-			ComponentName: component.Metadata.Name,
-			Version:       component.Metadata.Version,
-			CreatedAt:     component.Metadata.CreatedAt,
-			Status:        models.VersionStatusActive, // Simplified
-		}
-		versions = append(versions, version)
-	}
-
-	return versions, nil
-}
-
-// Additional versioning methods would be implemented here...
 func (s *catalogStore) GetLatestMajorVersion(ctx context.Context, name string, majorVersion int) (*models.ComponentVersion, error) {
 	return nil, fmt.Errorf("GetLatestMajorVersion not yet implemented")
 }
@@ -758,4 +715,523 @@ func (s *catalogStore) GetVersionsByCommit(ctx context.Context, commitSHA string
 
 // HealthCheck verifies the store is healthy
 func (s *catalogStore) HealthCheck(ctx context.Context) error {
-	return
+	return s.Ping(ctx)
+}
+
+// Ping checks connectivity to DynamoDB
+func (s *catalogStore) Ping(ctx context.Context) error {
+	return s.client.Ping(ctx)
+}
+
+// Helper methods
+
+// buildComponentPK builds the partition key for a component
+func (s *catalogStore) buildComponentPK(name string) string {
+	return fmt.Sprintf("COMPONENT#%s", name)
+}
+
+// buildVersionSK builds the sort key for a version
+func (s *catalogStore) buildVersionSK(version string) string {
+	return fmt.Sprintf("VERSION#%s", version)
+}
+
+// buildComponentCacheKey builds cache key for a component
+func (s *catalogStore) buildComponentCacheKey(name, version string) string {
+	return fmt.Sprintf("component:%s:%s", name, version)
+}
+
+// buildLatestVersionCacheKey builds cache key for latest version pointer
+func (s *catalogStore) buildLatestVersionCacheKey(name string) string {
+	return fmt.Sprintf("latest:%s", name)
+}
+
+// invalidateComponentCaches invalidates all caches related to a component
+func (s *catalogStore) invalidateComponentCaches(ctx context.Context, name string) {
+	if s.cache == nil {
+		return
+	}
+
+	// Invalidate latest version cache
+	latestKey := s.buildLatestVersionCacheKey(name)
+	if err := s.cache.Delete(ctx, latestKey); err != nil {
+		s.logger.WarnContext(ctx, "failed to invalidate latest version cache", "name", name, "error", err)
+	}
+
+	// Note: We don't invalidate individual version caches since they're immutable
+	// Only the "latest" pointer changes
+}
+
+// encodeToken encodes DynamoDB LastEvaluatedKey for pagination
+func (s *catalogStore) encodeToken(lastKey map[string]types.AttributeValue) string {
+	if len(lastKey) == 0 {
+		return ""
+	}
+
+	// Marshal the key to JSON and base64 encode it
+	keyBytes, err := json.ToJSON(lastKey)
+	if err != nil {
+		s.logger.Warn("failed to encode pagination token", "error", err)
+		return ""
+	}
+
+	return base64.URLEncoding.EncodeToString(keyBytes)
+}
+
+// decodeToken decodes pagination token back to DynamoDB key
+func (s *catalogStore) decodeToken(token string) (map[string]types.AttributeValue, error) {
+	if token == "" {
+		return nil, nil
+	}
+
+	keyBytes, err := base64.URLEncoding.DecodeString(token)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pagination token: %w", err)
+	}
+
+	var lastKey map[string]types.AttributeValue
+	if err := json.FromJSON(keyBytes, &lastKey); err != nil {
+		return nil, fmt.Errorf("failed to decode pagination token: %w", err)
+	}
+
+	return lastKey, nil
+}
+
+// buildScanInput builds a DynamoDB scan input with filters
+func (s *catalogStore) buildScanInput(req *storage.ListComponentsRequest) *dynamodb.ScanInput {
+	input := &dynamodb.ScanInput{
+		TableName: aws.String(s.tableName),
+	}
+
+	if req.Limit > 0 {
+		input.Limit = aws.Int32(req.Limit)
+	}
+
+	// Handle pagination
+	if req.NextToken != "" {
+		if lastKey, err := s.decodeToken(req.NextToken); err == nil && lastKey != nil {
+			input.ExclusiveStartKey = lastKey
+		}
+	}
+
+	// Build filter expressions
+	var filterParts []string
+	var expressionValues map[string]types.AttributeValue
+	var expressionNames map[string]string
+
+	if req.Filters != nil {
+		expressionValues = make(map[string]types.AttributeValue)
+		expressionNames = make(map[string]string)
+
+		// Provider filter
+		if len(req.Filters.Providers) > 0 {
+			var providerParts []string
+			for i, provider := range req.Filters.Providers {
+				key := fmt.Sprintf(":provider%d", i)
+				providerParts = append(providerParts, fmt.Sprintf("Provider = %s", key))
+				expressionValues[key] = &types.AttributeValueMemberS{Value: provider}
+			}
+			if len(providerParts) > 0 {
+				filterParts = append(filterParts, fmt.Sprintf("(%s)", strings.Join(providerParts, " OR ")))
+			}
+		}
+
+		// Category filter
+		if len(req.Filters.Categories) > 0 {
+			var categoryParts []string
+			for i, category := range req.Filters.Categories {
+				key := fmt.Sprintf(":category%d", i)
+				categoryParts = append(categoryParts, fmt.Sprintf("Category = %s", key))
+				expressionValues[key] = &types.AttributeValueMemberS{Value: category}
+			}
+			if len(categoryParts) > 0 {
+				filterParts = append(filterParts, fmt.Sprintf("(%s)", strings.Join(categoryParts, " OR ")))
+			}
+		}
+
+		// Maturity filter
+		if len(req.Filters.Maturity) > 0 {
+			var maturityParts []string
+			for i, maturity := range req.Filters.Maturity {
+				key := fmt.Sprintf(":maturity%d", i)
+				maturityParts = append(maturityParts, fmt.Sprintf("Maturity = %s", key))
+				expressionValues[key] = &types.AttributeValueMemberS{Value: string(maturity)}
+			}
+			if len(maturityParts) > 0 {
+				filterParts = append(filterParts, fmt.Sprintf("(%s)", strings.Join(maturityParts, " OR ")))
+			}
+		}
+
+		// Date filters
+		if req.Filters.CreatedAfter != nil {
+			filterParts = append(filterParts, "CreatedAt > :created_after")
+			expressionValues[":created_after"] = &types.AttributeValueMemberS{
+				Value: req.Filters.CreatedAfter.Format(time.RFC3339),
+			}
+		}
+
+		if req.Filters.CreatedBefore != nil {
+			filterParts = append(filterParts, "CreatedAt < :created_before")
+			expressionValues[":created_before"] = &types.AttributeValueMemberS{
+				Value: req.Filters.CreatedBefore.Format(time.RFC3339),
+			}
+		}
+	}
+
+	// Apply filter expression
+	if len(filterParts) > 0 {
+		input.FilterExpression = aws.String(strings.Join(filterParts, " AND "))
+		input.ExpressionAttributeValues = expressionValues
+		if len(expressionNames) > 0 {
+			input.ExpressionAttributeNames = expressionNames
+		}
+	}
+
+	return input
+}
+
+// buildSearchScanInput builds scan input for search operations
+func (s *catalogStore) buildSearchScanInput(req *storage.SearchComponentsRequest) *dynamodb.ScanInput {
+	input := &dynamodb.ScanInput{
+		TableName: aws.String(s.tableName),
+	}
+
+	if req.Limit > 0 {
+		input.Limit = aws.Int32(req.Limit)
+	}
+
+	if req.NextToken != "" {
+		if lastKey, err := s.decodeToken(req.NextToken); err == nil && lastKey != nil {
+			input.ExclusiveStartKey = lastKey
+		}
+	}
+
+	return input
+}
+
+// applyPostScanFilters applies filters that couldn't be done at the DynamoDB level
+func (s *catalogStore) applyPostScanFilters(components []*models.ComponentDefinition, filters *storage.ComponentFilters) []*models.ComponentDefinition {
+	if filters == nil {
+		return components
+	}
+
+	filtered := make([]*models.ComponentDefinition, 0, len(components))
+
+	for _, component := range components {
+		// Label filtering
+		if len(filters.Labels) > 0 && !s.matchesLabels(component, filters.Labels) {
+			continue
+		}
+
+		// Deployment engine filtering
+		if len(filters.DeploymentEngines) > 0 {
+			hasEngine := false
+			for _, engine := range filters.DeploymentEngines {
+				if component.SupportsEngine(engine) {
+					hasEngine = true
+					break
+				}
+			}
+			if !hasEngine {
+				continue
+			}
+		}
+
+		filtered = append(filtered, component)
+	}
+
+	return filtered
+}
+
+// applySorting sorts components based on the request
+func (s *catalogStore) applySorting(components []*models.ComponentDefinition, sortBy storage.SortField, sortOrder storage.SortOrder) []*models.ComponentDefinition {
+	if sortBy == "" {
+		return components
+	}
+
+	sort.Slice(components, func(i, j int) bool {
+		var less bool
+
+		switch sortBy {
+		case storage.SortByName:
+			less = components[i].Metadata.Name < components[j].Metadata.Name
+		case storage.SortByProvider:
+			less = components[i].Metadata.Provider < components[j].Metadata.Provider
+		case storage.SortByCategory:
+			less = components[i].Metadata.Category < components[j].Metadata.Category
+		case storage.SortByCreated:
+			less = components[i].Metadata.CreatedAt.Before(components[j].Metadata.CreatedAt)
+		case storage.SortByUpdated:
+			less = components[i].Metadata.UpdatedAt.Before(components[j].Metadata.UpdatedAt)
+		case storage.SortByVersion:
+			// Simple string comparison - in production, should use semantic version comparison
+			less = components[i].Metadata.Version < components[j].Metadata.Version
+		case storage.SortByMaturity:
+			less = components[i].Metadata.Maturity < components[j].Metadata.Maturity
+		default:
+			return false
+		}
+
+		if sortOrder == storage.SortDesc {
+			return !less
+		}
+		return less
+	})
+
+	return components
+}
+
+// matchesSearchQuery checks if a component matches the search query
+func (s *catalogStore) matchesSearchQuery(component *models.ComponentDefinition, query string) bool {
+	if query == "" {
+		return true
+	}
+
+	query = strings.ToLower(query)
+
+	// Search in name, description, provider, category
+	searchFields := []string{
+		strings.ToLower(component.Metadata.Name),
+		strings.ToLower(component.Metadata.DisplayName),
+		strings.ToLower(component.Metadata.Description),
+		strings.ToLower(component.Metadata.Provider),
+		strings.ToLower(component.Metadata.Category),
+		strings.ToLower(component.Metadata.ResourceType),
+	}
+
+	for _, field := range searchFields {
+		if strings.Contains(field, query) {
+			return true
+		}
+	}
+
+	// Search in labels
+	for key, value := range component.Metadata.Labels {
+		if strings.Contains(strings.ToLower(key), query) ||
+			strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// matchesLabels checks if a component matches all provided labels
+func (s *catalogStore) matchesLabels(component *models.ComponentDefinition, labels map[string]string) bool {
+	if len(labels) == 0 {
+		return true
+	}
+
+	if component.Metadata.Labels == nil {
+		return false
+	}
+
+	for key, value := range labels {
+		if componentValue, exists := component.Metadata.Labels[key]; !exists || componentValue != value {
+			return false
+		}
+	}
+
+	return true
+}
+
+// hasDependencyOn checks if a component depends on another component
+func (s *catalogStore) hasDependencyOn(component *models.ComponentDefinition, dependencyName string) bool {
+	for _, dep := range component.Spec.Dependencies {
+		if dep.Name == dependencyName {
+			return true
+		}
+	}
+	return false
+}
+
+// batchCreateComponentsBatch creates a batch of components
+func (s *catalogStore) batchCreateComponentsBatch(ctx context.Context, components []*models.ComponentDefinition) error {
+	if len(components) == 0 {
+		return nil
+	}
+
+	writeRequests := make([]types.WriteRequest, 0, len(components))
+
+	for _, component := range components {
+		dbItem := NewComponentItemFromDefinition(component)
+		item, err := attributevalue.MarshalMap(dbItem)
+		if err != nil {
+			return fmt.Errorf("failed to marshal component %s:%s: %w",
+				component.Metadata.Name, component.Metadata.Version, err)
+		}
+
+		writeRequests = append(writeRequests, types.WriteRequest{
+			PutRequest: &types.PutRequest{
+				Item: item,
+			},
+		})
+	}
+
+	// Execute batch write
+	_, err := s.client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+		RequestItems: map[string][]types.WriteRequest{
+			s.tableName: writeRequests,
+		},
+	})
+
+	return err
+}
+
+func (s *catalogStore) batchGetComponentsBatch(ctx context.Context, refs []storage.ComponentRef) ([]*models.ComponentDefinition, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]map[string]types.AttributeValue, 0, len(refs))
+	for _, ref := range refs {
+		keys = append(keys, map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: s.buildComponentPK(ref.Name)},
+			"SK": &types.AttributeValueMemberS{Value: s.buildVersionSK(ref.Version)},
+		})
+	}
+
+	result, err := s.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+		RequestItems: map[string]types.KeysAndAttributes{
+			s.tableName: {
+				Keys: keys,
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	components := make([]*models.ComponentDefinition, 0, len(result.Responses[s.tableName]))
+	for _, item := range result.Responses[s.tableName] {
+		var dbItem ComponentItem
+		if err := attributevalue.UnmarshalMap(item, &dbItem); err != nil {
+			s.logger.WarnContext(ctx, "failed to unmarshal component in batch", "error", err)
+			continue
+		}
+		components = append(components, dbItem.ToComponentDefinition())
+	}
+
+	return components, nil
+}
+
+func (s *catalogStore) wrapDynamoDBError(err error, operation string) error {
+	if err == nil {
+		return nil
+	}
+
+	var conditionErr *types.ConditionalCheckFailedException
+	if aws.As(err, &conditionErr) {
+		return storage.ErrComponentExists.WithDetail("operation", operation)
+	}
+
+	var resourceNotFoundErr *types.ResourceNotFoundException
+	if aws.As(err, &resourceNotFoundErr) {
+		return storage.ErrComponentNotFound.WithDetail("operation", operation)
+	}
+
+	var throttleErr *types.ProvisionedThroughputExceededException
+	if aws.As(err, &throttleErr) {
+		return fmt.Errorf("DynamoDB throttled during %s: %w", operation, err)
+	}
+
+	return fmt.Errorf("DynamoDB error during %s: %w", operation, err)
+}
+
+func (s *catalogStore) ensureTable(ctx context.Context) error {
+	exists, err := s.client.TableExists(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check if table exists: %w", err)
+	}
+
+	if exists {
+		s.logger.Info("DynamoDB table already exists", "table", s.tableName)
+		return nil
+	}
+
+	s.logger.Info("Creating DynamoDB table", "table", s.tableName)
+
+	_, err = s.client.CreateTable(ctx, &dynamodb.CreateTableInput{
+		TableName: aws.String(s.tableName),
+		KeySchema: []types.KeySchemaElement{
+			{
+				AttributeName: aws.String("PK"),
+				KeyType:       types.KeyTypeHash,
+			},
+			{
+				AttributeName: aws.String("SK"),
+				KeyType:       types.KeyTypeRange,
+			},
+		},
+		AttributeDefinitions: []types.AttributeDefinition{
+			{
+				AttributeName: aws.String("PK"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
+			{
+				AttributeName: aws.String("SK"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
+			{
+				AttributeName: aws.String("Provider"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
+			{
+				AttributeName: aws.String("Category"),
+				AttributeType: types.ScalarAttributeTypeS,
+			},
+		},
+		BillingMode: types.BillingModeProvisioned,
+		ProvisionedThroughput: &types.ProvisionedThroughput{
+			ReadCapacityUnits:  aws.Int64(int64(s.config.ReadCapacity)),
+			WriteCapacityUnits: aws.Int64(int64(s.config.WriteCapacity)),
+		},
+		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+			{
+				IndexName: aws.String("ProviderIndex"),
+				KeySchema: []types.KeySchemaElement{
+					{
+						AttributeName: aws.String("Provider"),
+						KeyType:       types.KeyTypeHash,
+					},
+					{
+						AttributeName: aws.String("SK"),
+						KeyType:       types.KeyTypeRange,
+					},
+				},
+				Projection: &types.Projection{
+					ProjectionType: types.ProjectionTypeAll,
+				},
+				ProvisionedThroughput: &types.ProvisionedThroughput{
+					ReadCapacityUnits:  aws.Int64(int64(s.config.ReadCapacity)),
+					WriteCapacityUnits: aws.Int64(int64(s.config.WriteCapacity)),
+				},
+			},
+			{
+				IndexName: aws.String("CategoryIndex"),
+				KeySchema: []types.KeySchemaElement{
+					{
+						AttributeName: aws.String("Category"),
+						KeyType:       types.KeyTypeHash,
+					},
+					{
+						AttributeName: aws.String("SK"),
+						KeyType:       types.KeyTypeRange,
+					},
+				},
+				Projection: &types.Projection{
+					ProjectionType: types.ProjectionTypeAll,
+				},
+				ProvisionedThroughput: &types.ProvisionedThroughput{
+					ReadCapacityUnits:  aws.Int64(int64(s.config.ReadCapacity)),
+					WriteCapacityUnits: aws.Int64(int64(s.config.WriteCapacity)),
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create table: %w", err)
+	}
+
+	s.logger.Info("Waiting for table to be active", "table", s.tableName)
+	return s.client.WaitForTable(ctx)
+}

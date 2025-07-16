@@ -2,6 +2,7 @@ package storage
 
 import (
 	"github.com/HatiCode/nestor/catalog/internal/storage/dynamodb"
+	"github.com/HatiCode/nestor/catalog/pkg/cache"
 	"github.com/HatiCode/nestor/shared/pkg/logging"
 )
 
@@ -10,7 +11,7 @@ type StorageConfig struct {
 	DynamoDB *dynamodb.Config `yaml:"dynamodb,omitempty"`
 }
 
-func NewCatalogStore(config *StorageConfig, cache Cache, logger logging.Logger) (CatalogStore, error) {
+func NewCatalogStore(config *StorageConfig, cache cache.Cache, logger logging.Logger) (CatalogStore, error) {
 	switch config.Type {
 	case "dynamodb":
 		if config.DynamoDB == nil {
@@ -28,7 +29,7 @@ func NewCatalogStore(config *StorageConfig, cache Cache, logger logging.Logger) 
 }
 
 // NewMemoryStore creates a new in-memory catalog store for testing
-func NewMemoryStore(cache Cache, logger logging.Logger) (CatalogStore, error) {
+func NewMemoryStore(cache cache.Cache, logger logging.Logger) (CatalogStore, error) {
 	// Implementation will be in memory/catalog.go
 	panic("not implemented - to be implemented in memory package")
 }
