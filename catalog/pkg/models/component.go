@@ -223,15 +223,103 @@ func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
 }
 
 func (c *ComponentDefinition) Validate() error {
+	// Validate required metadata fields
 	if c.Metadata.Name == "" {
 		return ErrInvalidComponentName
 	}
 	if c.Metadata.Version == "" {
 		return ErrInvalidComponentVersion
 	}
+
+	// Validate semantic version format
+	if _, err := ParseSemanticVersion(c.Metadata.Version); err != nil {
+		return fmt.Errorf("invalid semantic version format: %w", err)
+	}
+
+	// Validate required provider and category
+	if c.Metadata.Provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if c.Metadata.Category == "" {
+		return fmt.Errorf("category is required")
+	}
+
+	// Validate deployment engines
 	if len(c.Metadata.DeploymentEngines) == 0 {
 		return ErrNoDeploymentEngines
 	}
+
+	// Validate required inputs and outputs
+	if err := c.validateInputsAndOutputs(); err != nil {
+		return err
+	}
+
+	// Validate engine specs
+	if err := c.validateEngineSpecs(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Helper validation methods
+func (c *ComponentDefinition) validateInputsAndOutputs() error {
+	// Validate required inputs
+	for i, input := range c.Spec.RequiredInputs {
+		if input.Name == "" {
+			return fmt.Errorf("required input at index %d is missing name", i)
+		}
+		if input.Type == "" {
+			return fmt.Errorf("required input '%s' is missing type", input.Name)
+		}
+		if input.Description == "" {
+			return fmt.Errorf("required input '%s' is missing description", input.Name)
+		}
+	}
+
+	// Validate optional inputs
+	for i, input := range c.Spec.OptionalInputs {
+		if input.Name == "" {
+			return fmt.Errorf("optional input at index %d is missing name", i)
+		}
+		if input.Type == "" {
+			return fmt.Errorf("optional input '%s' is missing type", input.Name)
+		}
+	}
+
+	// Validate outputs
+	for i, output := range c.Spec.Outputs {
+		if output.Name == "" {
+			return fmt.Errorf("output at index %d is missing name", i)
+		}
+		if output.Type == "" {
+			return fmt.Errorf("output '%s' is missing type", output.Name)
+		}
+		if output.Description == "" {
+			return fmt.Errorf("output '%s' is missing description", output.Name)
+		}
+	}
+
+	return nil
+}
+
+func (c *ComponentDefinition) validateEngineSpecs() error {
+	// Ensure engine specs exist for all declared deployment engines
+	for _, engine := range c.Metadata.DeploymentEngines {
+		spec, exists := c.Spec.EngineSpecs[engine]
+		if !exists {
+			return fmt.Errorf("missing engine spec for declared deployment engine: %s", engine)
+		}
+
+		// Validate engine spec
+		if spec.Engine == "" {
+			return fmt.Errorf("engine spec for '%s' is missing engine name", engine)
+		}
+		if spec.Version == "" {
+			return fmt.Errorf("engine spec for '%s' is missing version", engine)
+		}
+	}
+
 	return nil
 }
 

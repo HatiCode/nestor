@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,18 +21,36 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
+	if c == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+
 	if c.Region == "" {
 		return fmt.Errorf("region is required")
 	}
+
 	if c.MaxRetries < 0 {
 		return fmt.Errorf("max_retries cannot be negative")
 	}
+
 	if c.MaxBatchSize < 1 || c.MaxBatchSize > 25 {
 		return fmt.Errorf("max_batch_size must be between 1 and 25 (DynamoDB limit)")
 	}
+
 	if c.QueryTimeout <= 0 {
 		return fmt.Errorf("query_timeout must be positive")
 	}
+
+	// Validate table name is not empty when not using default
+	if c.TableName != "" && len(c.TableName) < 3 {
+		return fmt.Errorf("table_name must be at least 3 characters long")
+	}
+
+	// Validate endpoint URL if provided
+	if c.Endpoint != "" && !strings.HasPrefix(c.Endpoint, "http") {
+		return fmt.Errorf("endpoint must be a valid URL starting with http:// or https://")
+	}
+
 	return nil
 }
 

@@ -12,6 +12,7 @@ Platform Teams → Git Repositories → Catalog Service → (Orchestrator, Compo
 ```
 
 **Key Responsibilities:**
+
 - **Resource Definition Storage**: Centralized storage of infrastructure primitives
 - **Git Synchronization**: Real-time sync from platform team repositories
 - **Version Management**: Semantic versioning for all resource definitions
@@ -35,12 +36,13 @@ catalog/
 │   │   └── middleware/               # HTTP middleware
 │   │
 │   ├── storage/                      # Storage abstraction layer
-│   │   ├── interfaces.go             # Storage interfaces
+│   │   ├── store.go                  # ComponentStore interface
+│   │   ├── factory.go                # Storage factory
 │   │   ├── dynamodb/                 # DynamoDB implementation
 │   │   │   ├── client.go             # DynamoDB client wrapper
-│   │   │   ├── resources.go          # Resource operations
-│   │   │   ├── versions.go           # Version management
-│   │   │   └── migrations.go         # Table creation/migration
+│   │   │   ├── component_store.go    # ComponentStore implementation
+│   │   │   ├── config.go             # DynamoDB configuration
+│   │   │   └── init.go               # Registration with factory
 │   │   ├── memory/                   # In-memory implementation (testing)
 │   │   └── cache/                    # Redis caching layer
 │   │
@@ -84,6 +86,7 @@ catalog/
 ## 🚀 Core Concepts
 
 ### **Resource Definitions**
+
 Infrastructure primitives managed by platform teams:
 
 ```yaml
@@ -149,6 +152,7 @@ spec:
 ```
 
 ### **Version Management**
+
 Semantic versioning with backward compatibility:
 
 ```
@@ -159,26 +163,28 @@ aws-rds-mysql:2.0.0  # Changed instance_class validation (major)
 ```
 
 ### **Real-time Updates**
+
 Server-Sent Events for live catalog synchronization:
 
 ```javascript
 // Example SSE client usage
-const eventSource = new EventSource('/api/v1/events');
+const eventSource = new EventSource("/api/v1/events");
 
-eventSource.addEventListener('resource.created', (event) => {
+eventSource.addEventListener("resource.created", (event) => {
   const resource = JSON.parse(event.data);
-  console.log('New resource available:', resource.metadata.name);
+  console.log("New resource available:", resource.metadata.name);
 });
 
-eventSource.addEventListener('resource.updated', (event) => {
+eventSource.addEventListener("resource.updated", (event) => {
   const resource = JSON.parse(event.data);
-  console.log('Resource updated:', resource.metadata.name);
+  console.log("Resource updated:", resource.metadata.name);
 });
 ```
 
 ## 🎯 API Endpoints
 
 ### **Resource Management**
+
 ```http
 # List all resources
 GET /api/v1/resources
@@ -199,6 +205,7 @@ GET /api/v1/search?q=database&provider=aws  # Filtered search
 ```
 
 ### **Real-time Updates**
+
 ```http
 # Server-Sent Events stream
 GET /api/v1/events
@@ -207,6 +214,7 @@ GET /api/v1/events?filter=category:database # Category-specific events
 ```
 
 ### **Health & Status**
+
 ```http
 GET /health                                 # Service health
 GET /ready                                  # Readiness probe
@@ -273,6 +281,7 @@ validation:
 ## 🚀 Getting Started
 
 ### **Local Development**
+
 ```bash
 # Start dependencies
 make docker-up
@@ -284,6 +293,7 @@ make dev-catalog
 ```
 
 ### **Docker Deployment**
+
 ```bash
 # Build and run
 make docker-build
@@ -294,6 +304,7 @@ docker run -p 8080:8080 \
 ```
 
 ### **Kubernetes Deployment**
+
 ```bash
 # Using Helm
 helm install nestor-catalog deployments/helm \
@@ -304,6 +315,7 @@ helm install nestor-catalog deployments/helm \
 ## 📊 Monitoring & Observability
 
 ### **Key Metrics**
+
 - `catalog_resources_total` - Total resources in catalog
 - `catalog_git_sync_duration` - Git synchronization time
 - `catalog_api_requests_total` - API request count and latency
@@ -311,12 +323,15 @@ helm install nestor-catalog deployments/helm \
 - `catalog_validation_errors` - Validation error count
 
 ### **Health Checks**
+
 - **Liveness**: Service process health
 - **Readiness**: Storage and cache connectivity
 - **Dependencies**: Git repository accessibility
 
 ### **Logging**
+
 Structured logging with correlation IDs:
+
 ```json
 {
   "timestamp": "2024-01-15T10:30:45Z",
@@ -333,17 +348,21 @@ Structured logging with correlation IDs:
 ## 🔒 Security
 
 ### **Authentication**
+
 - **Service-to-Service**: mTLS for internal communication
 - **External Access**: JWT tokens for API access
 - **Git Integration**: SSH keys or personal access tokens
 
 ### **Authorization**
+
 - **Read Access**: All authenticated services can read catalog
 - **Write Access**: Only platform teams can modify resources
 - **Git Integration**: Platform team repository access controls
 
 ### **Audit Logging**
+
 Complete audit trail for all resource changes:
+
 ```json
 {
   "event": "resource.updated",
@@ -359,6 +378,7 @@ Complete audit trail for all resource changes:
 ## 🎯 Integration Patterns
 
 ### **With Orchestrator Service**
+
 ```go
 // Orchestrator queries catalog for resource definitions
 catalogClient := catalog.NewClient(config.CatalogEndpoint)
@@ -373,6 +393,7 @@ deployment := orchestrator.CreateDeployment(resource, userConfig)
 ```
 
 ### **With Composer Service**
+
 ```go
 // Composer subscribes to catalog updates
 eventStream, err := catalogClient.Subscribe(ctx, &catalog.EventFilters{
@@ -393,6 +414,7 @@ for event := range eventStream {
 ## 🚨 Error Handling
 
 ### **Resource Not Found**
+
 ```json
 {
   "error": {
@@ -409,6 +431,7 @@ for event := range eventStream {
 ```
 
 ### **Validation Errors**
+
 ```json
 {
   "error": {
@@ -431,21 +454,25 @@ for event := range eventStream {
 ## 🎯 Key Design Decisions
 
 ### **Global Catalog**
+
 - **Single source of truth** for all infrastructure primitives
 - **No team isolation** at the catalog level - resources are globally available
 - **Platform team ownership** ensures consistency and governance
 
 ### **Git as Source of Truth**
+
 - **All resources defined in Git** repositories managed by platform teams
 - **Real-time synchronization** from Git to database storage
 - **Webhook-driven updates** for immediate catalog updates
 
 ### **Read-Heavy Optimization**
+
 - **Aggressive caching** with Redis for frequently accessed resources
 - **DynamoDB optimized** for high read throughput
 - **SSE for real-time updates** without polling overhead
 
 ### **Version Immutability**
+
 - **Resource versions are immutable** once published
 - **Semantic versioning enforced** for predictable compatibility
 - **Deprecation workflow** for managing resource lifecycle

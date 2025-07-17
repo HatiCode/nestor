@@ -4,27 +4,27 @@
 
 ```
 internal/storage/
-├── store.go            # Main CatalogStore interface (database-agnostic)
+├── store.go            # Main ComponentStore interface (database-agnostic)
 ├── cache.go            # Cache interface
 ├── config.go           # Configuration types
 ├── factory.go          # Factory for creating store implementations
 │
 ├── dynamodb/           # DynamoDB implementation
-│   ├── catalog.go      # CatalogStore implementation
+│   ├── component_store.go # ComponentStore implementation
 │   ├── client.go       # DynamoDB client wrapper
-│   ├── queries.go      # Query builders
-│   ├── migrations.go   # Table creation/migration
+│   ├── config.go       # DynamoDB configuration
+│   ├── init.go         # Registration with factory
 │   └── models.go       # DynamoDB-specific models
 │
 ├── postgres/           # PostgreSQL implementation (future)
-│   ├── catalog.go      # CatalogStore implementation
+│   ├── component_store.go # ComponentStore implementation
 │   ├── client.go       # PostgreSQL client wrapper
 │   ├── queries.go      # SQL query builders
 │   ├── migrations.go   # Database migrations
 │   └── models.go       # PostgreSQL-specific models
 │
 ├── memory/             # In-memory implementation (testing)
-│   └── catalog.go      # CatalogStore implementation
+│   └── component_store.go # ComponentStore implementation
 │
 internal/catalog/       # Business logic (separate from storage)
 ├── manager.go          # Catalog management business logic
@@ -50,12 +50,12 @@ internal/catalog/       # Business logic (separate from storage)
 ### Main Interface (Database-Agnostic)
 ```go
 // internal/storage/store.go
-type CatalogStore interface {
-    ComponentReader
-    ComponentWriter
-    ComponentSearcher
-    ComponentVersioning
-    HealthChecker
+type ComponentStore interface {
+    GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error)
+    ListComponents(ctx context.Context, filters ComponentFilters, pagination Pagination) (*ComponentList, error)
+    StoreComponent(ctx context.Context, component *models.ComponentDefinition) error
+    GetVersionHistory(ctx context.Context, name string) ([]models.ComponentVersion, error)
+    HealthCheck(ctx context.Context) error
 }
 ```
 
@@ -64,15 +64,15 @@ type CatalogStore interface {
 // internal/catalog/manager.go
 package catalog
 
-import "github.com/HatiCode/nestor/orchestrator/internal/storage"
+import "github.com/HatiCode/nestor/catalog/internal/storage"
 
 type Manager struct {
-    store     storage.CatalogStore  // Uses storage interface
-    validator ComponentValidator    // Local interface
+    store     storage.ComponentStore  // Uses storage interface
+    validator ComponentValidator      // Local interface
     logger    Logger
 }
 
-func NewManager(store storage.CatalogStore, validator ComponentValidator, logger Logger) *Manager {
+func NewManager(store storage.ComponentStore, validator ComponentValidator, logger Logger) *Manager {
     return &Manager{
         store:     store,
         validator: validator,
@@ -88,7 +88,7 @@ func (m *Manager) PublishComponent(ctx context.Context, component *models.Compon
     }
 
     // 2. Store component
-    if err := m.store.CreateComponent(ctx, component); err != nil {
+    if err := m.store.StoreComponent(ctx, component); err != nil {
         return err
     }
 
@@ -101,43 +101,64 @@ func (m *Manager) PublishComponent(ctx context.Context, component *models.Compon
 
 ### DynamoDB Implementation
 ```go
-// internal/storage/dynamodb/catalog.go
+// internal/storage/dynamodb/component_store.go
 package dynamodb
 
-import "github.com/HatiCode/nestor/orchestrator/internal/storage"
+import "github.com/HatiCode/nestor/catalog/internal/storage"
 
-type catalogStore struct {
-    client *Client
-    cache  storage.Cache
-    logger Logger
+type componentStore struct {
+    client    *Client
+    cache     cache.Cache
+    logger    logging.Logger
+    tableName string
+    config    *Config
 }
 
-// NewCatalogStore creates a DynamoDB-backed catalog store
-func NewCatalogStore(client *Client, cache storage.Cache, logger Logger) storage.CatalogStore {
-    return &catalogStore{
-        client: client,
-        cache:  cache,
-        logger: logger,
+// NewComponentStore creates a DynamoDB-backed ComponentStore
+func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger logging.Logger) (storage.ComponentStore, error) {
+    // Convert storage config to DynamoDB config
+    dynamoConfig, err := convertStorageConfig(config.DynamoDB)
+    if err != nil {
+        return nil, fmt.Errorf("failed to convert storage config: %w", err)
     }
+    
+    client, err := NewClient(dynamoConfig, logger)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create DynamoDB client: %w", err)
+    }
+    
+    store := &componentStore{
+        client:    client,
+        cache:     cache,
+        logger:    logger.With("component", "dynamodb_component_store"),
+        tableName: dynamoConfig.GetTableName(),
+        config:    dynamoConfig,
+    }
+    
+    return store, nil
 }
 
 // Pure storage implementation - no business logic
-func (s *catalogStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
+func (s *componentStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
     // 1. Check cache first
-    key := fmt.Sprintf("component:%s:%s", name, version)
-    if cached := s.cache.Get(ctx, key); cached != nil {
-        return cached.(*models.ComponentDefinition), nil
+    cacheKey := s.buildComponentCacheKey(name, version)
+    if s.cache != nil {
+        if cached := s.cache.Get(ctx, cacheKey); cached != nil {
+            if component, ok := cached.(*models.ComponentDefinition); ok {
+                return component, nil
+            }
+        }
     }
 
     // 2. Query DynamoDB
     result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
         TableName: aws.String(s.tableName),
         Key: map[string]types.AttributeValue{
-            "PK": &types.AttributeValueMemberS{Value: fmt.Sprintf("COMPONENT#%s", name)},
-            "SK": &types.AttributeValueMemberS{Value: fmt.Sprintf("VERSION#%s", version)},
+            "PK": &types.AttributeValueMemberS{Value: s.buildComponentPK(name)},
+            "SK": &types.AttributeValueMemberS{Value: s.buildVersionSK(version)},
         },
     })
-
+    
     // 3. Parse and cache result
     // ... implementation details
 }
@@ -153,13 +174,13 @@ func main() {
     cache := cache.NewRedisClient(config.Cache, logger)
 
     // Factory creates the right implementation based on config
-    catalogStore, err := storage.NewCatalogStore(config.Storage, cache, logger)
+    componentStore, err := storage.NewComponentStore(config.Storage, cache, logger)
     if err != nil {
         log.Fatal(err)
     }
 
     // Rest of the app doesn't know/care about the implementation
-    catalogManager := catalog.NewManager(catalogStore, validator, logger)
+    catalogManager := catalog.NewManager(componentStore, validator, logger)
     server := api.NewServer(catalogManager, logger)
     server.Start()
 }
