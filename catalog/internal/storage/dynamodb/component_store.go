@@ -34,7 +34,6 @@ func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger 
 		return nil, storage.NewConfigurationError("DynamoDB", "DynamoDB config is required")
 	}
 
-	// Convert storage config to DynamoDB config
 	dynamoConfig, err := convertStorageConfig(config.DynamoDB)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert storage config: %w", err)
@@ -77,7 +76,6 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 
 	s.logger.DebugContext(ctx, "getting component", "name", name, "version", version)
 
-	// Check cache first
 	if s.cache != nil {
 		cacheKey := s.buildComponentCacheKey(name, version)
 		if cached := s.cache.Get(ctx, cacheKey); cached != nil {
@@ -88,7 +86,6 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 		}
 	}
 
-	// Query DynamoDB
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.tableName),
 		Key: map[string]types.AttributeValue{
@@ -107,7 +104,6 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 			WithDetail("operation", "GetComponent")
 	}
 
-	// Unmarshal DynamoDB item
 	var dbItem ComponentItem
 	if err := attributevalue.UnmarshalMap(result.Item, &dbItem); err != nil {
 		s.logger.ErrorContext(ctx, "failed to unmarshal component",
@@ -117,7 +113,6 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 
 	component := dbItem.ToComponentDefinition()
 
-	// Cache the result
 	if s.cache != nil {
 		cacheKey := s.buildComponentCacheKey(name, version)
 		if err := s.cache.Set(ctx, cacheKey, component, 5*time.Minute); err != nil {
@@ -133,7 +128,6 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 func (s *componentStore) ListComponents(ctx context.Context, filters storage.ComponentFilters, pagination storage.Pagination) (*storage.ComponentList, error) {
 	s.logger.DebugContext(ctx, "listing components", "limit", pagination.Limit)
 
-	// Validate inputs
 	if err := filters.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid filters: %w", err)
 	}
@@ -141,7 +135,6 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 		return nil, fmt.Errorf("invalid pagination: %w", err)
 	}
 
-	// Build scan input with filters
 	scanInput := s.buildScanInput(&filters, &pagination)
 
 	result, err := s.client.Scan(ctx, scanInput)
@@ -150,7 +143,6 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 		return nil, s.wrapDynamoDBError(err, "ListComponents", "", "")
 	}
 
-	// Unmarshal results
 	components := make([]*models.ComponentDefinition, 0, len(result.Items))
 	for _, item := range result.Items {
 		var dbItem ComponentItem
@@ -161,11 +153,9 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 		components = append(components, dbItem.ToComponentDefinition())
 	}
 
-	// Apply post-scan filtering and sorting
 	components = s.applyPostScanFilters(components, &filters)
 	components = s.applySorting(components, pagination.SortBy, pagination.SortOrder)
 
-	// Handle pagination
 	var nextToken string
 	hasMore := false
 	if result.LastEvaluatedKey != nil {
@@ -193,19 +183,16 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 	s.logger.InfoContext(ctx, "storing component",
 		"name", component.Metadata.Name, "version", component.Metadata.Version)
 
-	// Validate component
 	if err := component.Validate(); err != nil {
 		return storage.NewValidationError("component", fmt.Sprintf("invalid component: %v", err))
 	}
 
-	// Convert to DynamoDB item
 	dbItem := NewComponentItemFromDefinition(component)
 	item, err := attributevalue.MarshalMap(dbItem)
 	if err != nil {
 		return fmt.Errorf("failed to marshal component: %w", err)
 	}
 
-	// Store with upsert behavior (overwrite if exists)
 	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.tableName),
 		Item:      item,
@@ -216,7 +203,6 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 		return s.wrapDynamoDBError(err, "StoreComponent", component.Metadata.Name, component.Metadata.Version)
 	}
 
-	// Invalidate caches
 	s.invalidateComponentCaches(ctx, component.Metadata.Name)
 
 	s.logger.InfoContext(ctx, "component stored successfully",
@@ -233,7 +219,6 @@ func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]
 
 	s.logger.DebugContext(ctx, "getting component version history", "name", name)
 
-	// Query all versions for this component
 	result, err := s.client.Query(ctx, &dynamodb.QueryInput{
 		TableName:              aws.String(s.tableName),
 		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk_prefix)"),
@@ -256,7 +241,6 @@ func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]
 			continue
 		}
 
-		// Convert ComponentDefinition to ComponentVersion
 		component := dbItem.ToComponentDefinition()
 		version := models.ComponentVersion{
 			ComponentName: component.Metadata.Name,
@@ -285,8 +269,6 @@ func (s *componentStore) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// Helper methods
-
 func (s *componentStore) buildComponentPK(name string) string {
 	return fmt.Sprintf("COMPONENT#%s", name)
 }
@@ -304,7 +286,6 @@ func (s *componentStore) invalidateComponentCaches(ctx context.Context, name str
 		return
 	}
 
-	// Invalidate latest version cache
 	latestKey := fmt.Sprintf("latest:%s", name)
 	if err := s.cache.Delete(ctx, latestKey); err != nil {
 		s.logger.WarnContext(ctx, "failed to invalidate latest version cache", "name", name, "error", err)
@@ -312,7 +293,6 @@ func (s *componentStore) invalidateComponentCaches(ctx context.Context, name str
 }
 
 func (s *componentStore) wrapDynamoDBError(err error, operation string, params ...string) error {
-	// Extract optional parameters for more context
 	var name, version string
 	if len(params) > 0 {
 		name = params[0]
@@ -321,14 +301,12 @@ func (s *componentStore) wrapDynamoDBError(err error, operation string, params .
 		version = params[1]
 	}
 
-	// Convert AWS DynamoDB errors to storage errors using type assertions
 	var resourceNotFoundErr *types.ResourceNotFoundException
 	var conditionalCheckFailedErr *types.ConditionalCheckFailedException
 	var throttledErr *types.ProvisionedThroughputExceededException
 
 	switch {
 	case errors.As(err, &resourceNotFoundErr):
-		// Resource not found error
 		if name != "" {
 			return storage.NewComponentNotFoundError(name, version).
 				WithDetail("operation", operation)
@@ -337,7 +315,6 @@ func (s *componentStore) wrapDynamoDBError(err error, operation string, params .
 			WithDetail("operation", operation)
 
 	case errors.As(err, &conditionalCheckFailedErr):
-		// Conditional check failed (resource exists)
 		if name != "" {
 			return storage.NewComponentExistsError(name, version).
 				WithDetail("operation", operation)
@@ -346,12 +323,10 @@ func (s *componentStore) wrapDynamoDBError(err error, operation string, params .
 			WithDetail("operation", operation)
 
 	case errors.As(err, &throttledErr):
-		// Throttling error
 		return storage.NewThrottledError(err.Error()).
 			WithDetail("operation", operation)
 
 	default:
-		// Generic storage error
 		return storage.NewStorageUnavailableError(err.Error()).
 			WithDetail("operation", operation)
 	}
@@ -370,7 +345,6 @@ func convertStorageConfig(storageConfig *storage.DynamoDBStorageConfig) (*Config
 		VerifyTableSchema: storageConfig.VerifyTableSchema,
 	}
 
-	// Parse timeout duration
 	if storageConfig.QueryTimeout != "" {
 		timeout, err := time.ParseDuration(storageConfig.QueryTimeout)
 		if err != nil {
@@ -381,7 +355,6 @@ func convertStorageConfig(storageConfig *storage.DynamoDBStorageConfig) (*Config
 		config.QueryTimeout = 30 * time.Second
 	}
 
-	// Set defaults
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
 	}
@@ -391,8 +364,6 @@ func convertStorageConfig(storageConfig *storage.DynamoDBStorageConfig) (*Config
 
 	return config, nil
 }
-
-// Additional helper methods for filtering, sorting, and table management
 
 func (s *componentStore) buildScanInput(filters *storage.ComponentFilters, pagination *storage.Pagination) *dynamodb.ScanInput {
 	input := &dynamodb.ScanInput{
@@ -410,14 +381,12 @@ func (s *componentStore) buildScanInput(filters *storage.ComponentFilters, pagin
 		}
 	}
 
-	// Build filter expressions (simplified for MVP)
 	var filterParts []string
 	var expressionValues map[string]types.AttributeValue
 
 	if filters != nil {
 		expressionValues = make(map[string]types.AttributeValue)
 
-		// Provider filter
 		if len(filters.Providers) > 0 {
 			var providerParts []string
 			for i, provider := range filters.Providers {
@@ -430,7 +399,6 @@ func (s *componentStore) buildScanInput(filters *storage.ComponentFilters, pagin
 			}
 		}
 
-		// Category filter
 		if len(filters.Categories) > 0 {
 			var categoryParts []string
 			for i, category := range filters.Categories {
@@ -444,7 +412,6 @@ func (s *componentStore) buildScanInput(filters *storage.ComponentFilters, pagin
 		}
 	}
 
-	// Apply filter expression if we have filters
 	if len(filterParts) > 0 {
 		input.FilterExpression = aws.String(fmt.Sprintf("%v", filterParts))
 		input.ExpressionAttributeValues = expressionValues
@@ -468,12 +435,10 @@ func (s *componentStore) applyPostScanFilters(components []*models.ComponentDefi
 }
 
 func (s *componentStore) matchesFilters(component *models.ComponentDefinition, filters *storage.ComponentFilters) bool {
-	// Active only filter
 	if filters.ActiveOnly && component.IsDeprecated() {
 		return false
 	}
 
-	// Date filters
 	if filters.CreatedAfter != nil && component.Metadata.CreatedAt.Before(*filters.CreatedAfter) {
 		return false
 	}
@@ -481,7 +446,6 @@ func (s *componentStore) matchesFilters(component *models.ComponentDefinition, f
 		return false
 	}
 
-	// Label filters
 	if len(filters.Labels) > 0 {
 		for key, value := range filters.Labels {
 			if !component.HasLabel(key, value) {
@@ -500,13 +464,11 @@ func (s *componentStore) applySorting(components []*models.ComponentDefinition, 
 }
 
 func (s *componentStore) encodeToken(lastKey map[string]types.AttributeValue) string {
-	// Convert DynamoDB LastEvaluatedKey to JSON and encode as base64
 	if lastKey == nil {
 		return ""
 	}
 
-	// Convert to a map that can be marshaled to JSON
-	jsonMap := make(map[string]interface{})
+	jsonMap := make(map[string]any)
 	for k, v := range lastKey {
 		switch tv := v.(type) {
 		case *types.AttributeValueMemberS:
@@ -515,7 +477,6 @@ func (s *componentStore) encodeToken(lastKey map[string]types.AttributeValue) st
 			jsonMap[k] = map[string]string{"N": tv.Value}
 		case *types.AttributeValueMemberB:
 			jsonMap[k] = map[string][]byte{"B": tv.Value}
-			// Add other types as needed
 		}
 	}
 
@@ -533,22 +494,19 @@ func (s *componentStore) decodeToken(token string) (map[string]types.AttributeVa
 		return nil, nil
 	}
 
-	// Decode base64 token
 	jsonData, err := base64.StdEncoding.DecodeString(token)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pagination token: %w", err)
 	}
 
-	// Unmarshal JSON to map
-	var jsonMap map[string]interface{}
+	var jsonMap map[string]any
 	if err := json.Unmarshal(jsonData, &jsonMap); err != nil {
 		return nil, fmt.Errorf("invalid pagination token format: %w", err)
 	}
 
-	// Convert back to DynamoDB AttributeValue map
 	result := make(map[string]types.AttributeValue)
 	for k, v := range jsonMap {
-		valueMap, ok := v.(map[string]interface{})
+		valueMap, ok := v.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -560,7 +518,6 @@ func (s *componentStore) decodeToken(token string) (map[string]types.AttributeVa
 		} else if binVal, ok := valueMap["B"].([]byte); ok {
 			result[k] = &types.AttributeValueMemberB{Value: binVal}
 		}
-		// Add other types as needed
 	}
 
 	return result, nil
@@ -579,7 +536,6 @@ func (s *componentStore) ensureTable(ctx context.Context) error {
 
 	s.logger.InfoContext(ctx, "creating table", "table", s.tableName)
 
-	// Create table with basic schema
 	_, err = s.client.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName: aws.String(s.tableName),
 		KeySchema: []types.KeySchemaElement{
@@ -608,6 +564,5 @@ func (s *componentStore) ensureTable(ctx context.Context) error {
 		return fmt.Errorf("failed to create table: %w", err)
 	}
 
-	// Wait for table to be active
 	return s.client.WaitForTable(ctx)
 }
