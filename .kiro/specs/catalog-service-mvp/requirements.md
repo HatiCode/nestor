@@ -4,7 +4,7 @@
 
 The Catalog Service MVP serves as the foundation layer of the Nestor platform, providing a centralized repository of infrastructure resource definitions. This service acts as a "buffet" where developers can discover and consume low-level infrastructure components (databases, storage, compute, networking, etc.) that platform teams have defined and validated.
 
-The MVP focuses on core functionality: storing, retrieving, and serving component definitions through a REST API, with DynamoDB as the initial storage backend. The architecture emphasizes SOLID principles and dependency injection to ensure the system can evolve and support additional storage backends, validation engines, and integration patterns as the platform grows.
+The MVP focuses on core functionality: storing, retrieving, and serving component definitions through a REST API, with DynamoDB as the initial storage backend. The architecture emphasizes SOLID principles, idiomatic Go and dependency injection to ensure the system can evolve and support additional storage backends, validation engines, and integration patterns as the platform grows.
 
 ## Requirements
 
