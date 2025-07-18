@@ -289,94 +289,77 @@ func (cv *ComponentVersion) IsYanked() bool {
 	return cv.Status == VersionStatusYanked
 }
 
-func ParseVersionConstraint(constraint string) (*VersionConstraint, error) {
+type ConstraintParser interface {
+	Parse(constraint string) (*VersionConstraint, error)
+}
+
+type constraintRule struct {
+	prefix   string
+	operator ConstraintOperator
+	trimLen  int
+}
+
+type tableConstraintParser struct {
+	rules []constraintRule
+}
+
+func NewConstraintParser() ConstraintParser {
+	return &tableConstraintParser{
+		rules: []constraintRule{
+			{">=", OperatorGreaterEqual, 2},
+			{"<=", OperatorLessEqual, 2},
+			{">", OperatorGreaterThan, 1},
+			{"<", OperatorLessThan, 1},
+			{"~", OperatorTilde, 1},
+			{"^", OperatorCaret, 1},
+		},
+	}
+}
+
+func (p *tableConstraintParser) Parse(constraint string) (*VersionConstraint, error) {
 	constraint = strings.TrimSpace(constraint)
 
-	if constraint == "" || constraint == "*" {
+	if constraint == "*" {
 		return &VersionConstraint{
 			Raw:      constraint,
 			Operator: OperatorAny,
 		}, nil
 	}
 
-	switch {
-	case strings.HasPrefix(constraint, ">="):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[2:]))
-		if err != nil {
-			return nil, err
+	for _, rule := range p.rules {
+		if strings.HasPrefix(constraint, rule.prefix) {
+			return p.parseWithRule(constraint, rule)
 		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorGreaterEqual,
-			Version:  *version,
-		}, nil
-
-	case strings.HasPrefix(constraint, "<="):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[2:]))
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorLessEqual,
-			Version:  *version,
-		}, nil
-
-	case strings.HasPrefix(constraint, ">"):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[1:]))
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorGreaterThan,
-			Version:  *version,
-		}, nil
-
-	case strings.HasPrefix(constraint, "<"):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[1:]))
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorLessThan,
-			Version:  *version,
-		}, nil
-
-	case strings.HasPrefix(constraint, "~"):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[1:]))
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorTilde,
-			Version:  *version,
-		}, nil
-
-	case strings.HasPrefix(constraint, "^"):
-		version, err := ParseSemanticVersion(strings.TrimSpace(constraint[1:]))
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorCaret,
-			Version:  *version,
-		}, nil
-
-	default:
-		version, err := ParseSemanticVersion(constraint)
-		if err != nil {
-			return nil, err
-		}
-		return &VersionConstraint{
-			Raw:      constraint,
-			Operator: OperatorEqual,
-			Version:  *version,
-		}, nil
 	}
+
+	return p.parseExactMatch(constraint)
+}
+
+func (p *tableConstraintParser) parseWithRule(constraint string, rule constraintRule) (*VersionConstraint, error) {
+	versionStr := strings.TrimSpace(constraint[rule.trimLen:])
+	version, err := ParseSemanticVersion(versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid version in constraint %q: %w", constraint, err)
+	}
+
+	return &VersionConstraint{
+		Raw:      constraint,
+		Operator: rule.operator,
+		Version:  *version,
+	}, nil
+}
+
+func (p *tableConstraintParser) parseExactMatch(constraint string) (*VersionConstraint, error) {
+	version, err := ParseSemanticVersion(constraint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid version constraint %q: %w", constraint, err)
+	}
+
+	return &VersionConstraint{
+		Raw:      constraint,
+		Operator: OperatorEqual,
+		Version:  *version,
+	}, nil
 }
 
 func (vc *VersionConstraint) Satisfies(version *SemanticVersionInfo) bool {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -31,7 +31,7 @@ type componentStore struct {
 // NewComponentStore creates a new DynamoDB-backed ComponentStore
 func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger logging.Logger) (storage.ComponentStore, error) {
 	if config.DynamoDB == nil {
-		return nil, storage.ErrInvalidConfig.WithDetail("reason", "DynamoDB config is required")
+		return nil, storage.NewConfigurationError("DynamoDB", "DynamoDB config is required")
 	}
 
 	// Convert storage config to DynamoDB config
@@ -69,10 +69,10 @@ func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger 
 // GetComponent retrieves a specific component by name and version
 func (s *componentStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
 	if name == "" {
-		return nil, storage.ErrInvalidInput.WithDetail("field", "name").WithDetail("reason", "component name is required")
+		return nil, storage.NewValidationError("name", "component name is required")
 	}
 	if version == "" {
-		return nil, storage.ErrInvalidInput.WithDetail("field", "version").WithDetail("reason", "component version is required")
+		return nil, storage.NewValidationError("version", "component version is required")
 	}
 
 	s.logger.DebugContext(ctx, "getting component", "name", name, "version", version)
@@ -99,13 +99,12 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to get component from DynamoDB",
 			"name", name, "version", version, "error", err)
-		return nil, s.wrapDynamoDBError(err, "GetComponent")
+		return nil, s.wrapDynamoDBError(err, "GetComponent", name, version)
 	}
 
 	if result.Item == nil {
-		return nil, storage.ErrComponentNotFound.
-			WithDetail("name", name).
-			WithDetail("version", version)
+		return nil, storage.NewComponentNotFoundError(name, version).
+			WithDetail("operation", "GetComponent")
 	}
 
 	// Unmarshal DynamoDB item
@@ -148,7 +147,7 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 	result, err := s.client.Scan(ctx, scanInput)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to scan components", "error", err)
-		return nil, s.wrapDynamoDBError(err, "ListComponents")
+		return nil, s.wrapDynamoDBError(err, "ListComponents", "", "")
 	}
 
 	// Unmarshal results
@@ -188,7 +187,7 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 // StoreComponent stores a component definition
 func (s *componentStore) StoreComponent(ctx context.Context, component *models.ComponentDefinition) error {
 	if component == nil {
-		return storage.ErrInvalidInput.WithDetail("field", "component").WithDetail("reason", "component is required")
+		return storage.NewValidationError("component", "component is required")
 	}
 
 	s.logger.InfoContext(ctx, "storing component",
@@ -196,7 +195,7 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 
 	// Validate component
 	if err := component.Validate(); err != nil {
-		return storage.ErrInvalidInput.WithDetail("reason", fmt.Sprintf("invalid component: %v", err))
+		return storage.NewValidationError("component", fmt.Sprintf("invalid component: %v", err))
 	}
 
 	// Convert to DynamoDB item
@@ -214,7 +213,7 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to store component",
 			"name", component.Metadata.Name, "version", component.Metadata.Version, "error", err)
-		return s.wrapDynamoDBError(err, "StoreComponent")
+		return s.wrapDynamoDBError(err, "StoreComponent", component.Metadata.Name, component.Metadata.Version)
 	}
 
 	// Invalidate caches
@@ -229,7 +228,7 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 // GetVersionHistory gets all versions of a component
 func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]models.ComponentVersion, error) {
 	if name == "" {
-		return nil, storage.ErrInvalidInput.WithDetail("field", "name").WithDetail("reason", "component name is required")
+		return nil, storage.NewValidationError("name", "component name is required")
 	}
 
 	s.logger.DebugContext(ctx, "getting component version history", "name", name)
@@ -246,7 +245,7 @@ func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to get version history", "name", name, "error", err)
-		return nil, s.wrapDynamoDBError(err, "GetVersionHistory")
+		return nil, s.wrapDynamoDBError(err, "GetVersionHistory", name, "")
 	}
 
 	versions := make([]models.ComponentVersion, 0, len(result.Items))
@@ -278,7 +277,8 @@ func (s *componentStore) HealthCheck(ctx context.Context) error {
 
 	if err := s.client.Ping(ctx); err != nil {
 		s.logger.ErrorContext(ctx, "health check failed", "error", err)
-		return storage.ErrStorageNotAvailable.WithDetail("reason", err.Error())
+		return storage.NewStorageUnavailableError(err.Error()).
+			WithDetail("operation", "HealthCheck")
 	}
 
 	s.logger.DebugContext(ctx, "health check passed")
@@ -311,37 +311,50 @@ func (s *componentStore) invalidateComponentCaches(ctx context.Context, name str
 	}
 }
 
-func (s *componentStore) wrapDynamoDBError(err error, operation string) error {
-	// Convert AWS DynamoDB errors to storage errors
-	switch {
-	case isDynamoDBResourceNotFound(err):
-		return storage.ErrComponentNotFound.WithDetail("operation", operation)
-	case isDynamoDBConditionalCheckFailed(err):
-		return storage.ErrComponentExists.WithDetail("operation", operation)
-	case isDynamoDBThrottled(err):
-		return storage.ErrStorageNotAvailable.WithDetail("operation", operation).WithDetail("reason", "throttled")
-	default:
-		return storage.ErrStorageNotAvailable.WithDetail("operation", operation).WithDetail("reason", err.Error())
+func (s *componentStore) wrapDynamoDBError(err error, operation string, params ...string) error {
+	// Extract optional parameters for more context
+	var name, version string
+	if len(params) > 0 {
+		name = params[0]
 	}
-}
+	if len(params) > 1 {
+		version = params[1]
+	}
 
-// Helper functions to check DynamoDB error types
-func isDynamoDBResourceNotFound(err error) bool {
-	_, isResourceNotFound := err.(*types.ResourceNotFoundException)
-	return err != nil && (isResourceNotFound ||
-		strings.Contains(err.Error(), "ResourceNotFoundException"))
-}
+	// Convert AWS DynamoDB errors to storage errors using type assertions
+	var resourceNotFoundErr *types.ResourceNotFoundException
+	var conditionalCheckFailedErr *types.ConditionalCheckFailedException
+	var throttledErr *types.ProvisionedThroughputExceededException
 
-func isDynamoDBConditionalCheckFailed(err error) bool {
-	_, isConditionalCheckFailed := err.(*types.ConditionalCheckFailedException)
-	return err != nil && (isConditionalCheckFailed ||
-		strings.Contains(err.Error(), "ConditionalCheckFailedException"))
-}
+	switch {
+	case errors.As(err, &resourceNotFoundErr):
+		// Resource not found error
+		if name != "" {
+			return storage.NewComponentNotFoundError(name, version).
+				WithDetail("operation", operation)
+		}
+		return storage.NewResourceNotFoundError("component", "unknown").
+			WithDetail("operation", operation)
 
-func isDynamoDBThrottled(err error) bool {
-	_, isThrottled := err.(*types.ProvisionedThroughputExceededException)
-	return err != nil && (isThrottled ||
-		strings.Contains(err.Error(), "ProvisionedThroughputExceededException"))
+	case errors.As(err, &conditionalCheckFailedErr):
+		// Conditional check failed (resource exists)
+		if name != "" {
+			return storage.NewComponentExistsError(name, version).
+				WithDetail("operation", operation)
+		}
+		return storage.NewResourceExistsError("component", "unknown").
+			WithDetail("operation", operation)
+
+	case errors.As(err, &throttledErr):
+		// Throttling error
+		return storage.NewThrottledError(err.Error()).
+			WithDetail("operation", operation)
+
+	default:
+		// Generic storage error
+		return storage.NewStorageUnavailableError(err.Error()).
+			WithDetail("operation", operation)
+	}
 }
 
 // convertStorageConfig converts the generic storage config to DynamoDB-specific config

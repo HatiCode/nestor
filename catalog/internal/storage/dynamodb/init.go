@@ -6,9 +6,14 @@ import (
 	"github.com/HatiCode/nestor/shared/pkg/logging"
 )
 
-func init() {
-	// Register the DynamoDB component store factory
-	storage.RegisterComponentStoreFactory("dynamodb", func(config *storage.StorageConfig, cache cache.Cache, logger logging.Logger) (storage.ComponentStore, error) {
+// RegisterWith registers the DynamoDB component store factory with the provided registry
+func RegisterWith(registry *storage.Registry) {
+	registry.Register("dynamodb", func(config *storage.StorageConfig, cache cache.Cache, logger logging.Logger) (storage.ComponentStore, error) {
 		return NewComponentStore(config, cache, logger)
 	})
+}
+
+func init() {
+	// Register with the default registry for backward compatibility
+	RegisterWith(storage.DefaultRegistry)
 }
