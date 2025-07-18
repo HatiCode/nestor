@@ -19,7 +19,7 @@ import (
 	"github.com/HatiCode/nestor/shared/pkg/logging"
 )
 
-// componentStore implements the ComponentStore interface for DynamoDB
+// componentStore implements the ComponentStore interface for DynamoDB.
 type componentStore struct {
 	client    *Client
 	cache     cache.Cache
@@ -28,7 +28,7 @@ type componentStore struct {
 	config    *Config
 }
 
-// NewComponentStore creates a new DynamoDB-backed ComponentStore
+// NewComponentStore creates a new DynamoDB-backed ComponentStore.
 func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger logging.Logger) (storage.ComponentStore, error) {
 	if config.DynamoDB == nil {
 		return nil, storage.NewConfigurationError("DynamoDB", "DynamoDB config is required")
@@ -65,7 +65,7 @@ func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger 
 	return store, nil
 }
 
-// GetComponent retrieves a specific component by name and version
+// GetComponent retrieves a specific component by name and version.
 func (s *componentStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
 	if name == "" {
 		return nil, storage.NewValidationError("name", "component name is required")
@@ -124,7 +124,7 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 	return component, nil
 }
 
-// ListComponents retrieves components with filtering and pagination
+// ListComponents retrieves components with filtering and pagination.
 func (s *componentStore) ListComponents(ctx context.Context, filters storage.ComponentFilters, pagination storage.Pagination) (*storage.ComponentList, error) {
 	s.logger.DebugContext(ctx, "listing components", "limit", pagination.Limit)
 
@@ -174,7 +174,7 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 	return response, nil
 }
 
-// StoreComponent stores a component definition
+// StoreComponent stores a component definition.
 func (s *componentStore) StoreComponent(ctx context.Context, component *models.ComponentDefinition) error {
 	if component == nil {
 		return storage.NewValidationError("component", "component is required")
@@ -211,7 +211,7 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 	return nil
 }
 
-// GetVersionHistory gets all versions of a component
+// GetVersionHistory gets all versions of a component.
 func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]models.ComponentVersion, error) {
 	if name == "" {
 		return nil, storage.NewValidationError("name", "component name is required")
@@ -255,7 +255,7 @@ func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]
 	return versions, nil
 }
 
-// HealthCheck verifies the store is healthy
+// HealthCheck verifies the store is healthy.
 func (s *componentStore) HealthCheck(ctx context.Context) error {
 	s.logger.DebugContext(ctx, "performing health check")
 
@@ -332,7 +332,7 @@ func (s *componentStore) wrapDynamoDBError(err error, operation string, params .
 	}
 }
 
-// convertStorageConfig converts the generic storage config to DynamoDB-specific config
+// convertStorageConfig converts the generic storage config to DynamoDB-specific config.
 func convertStorageConfig(storageConfig *storage.DynamoDBStorageConfig) (*Config, error) {
 	config := &Config{
 		TableName:         storageConfig.TableName,

@@ -8,7 +8,7 @@ import (
 	"github.com/HatiCode/nestor/catalog/pkg/models"
 )
 
-// ComponentStore is the main interface for component storage operations
+// ComponentStore is the main interface for component storage operations.
 type ComponentStore interface {
 	GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error)
 	ListComponents(ctx context.Context, filters ComponentFilters, pagination Pagination) (*ComponentList, error)
@@ -70,7 +70,7 @@ const (
 	SortDesc SortOrder = "desc"
 )
 
-// Validation methods
+// Validation methods.
 func (f *ComponentFilters) Validate() error {
 	if f == nil {
 		return nil

@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// StorageError is the base error type for all storage-related errors
+// StorageError is the base error type for all storage-related error.
 type StorageError struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
@@ -15,7 +15,7 @@ func (e *StorageError) Error() string {
 	return e.Message
 }
 
-// WithDetail adds a detail to the error
+// WithDetail adds a detail to the error.
 func (e *StorageError) WithDetail(key string, value any) *StorageError {
 	if e.Details == nil {
 		e.Details = make(map[string]any)
@@ -24,7 +24,7 @@ func (e *StorageError) WithDetail(key string, value any) *StorageError {
 	return e
 }
 
-// NewStorageError creates a new StorageError
+// NewStorageError creates a new StorageError.
 func NewStorageError(code, message string) *StorageError {
 	return &StorageError{
 		Code:    code,
@@ -33,10 +33,7 @@ func NewStorageError(code, message string) *StorageError {
 	}
 }
 
-// Specific error types that implement the error interface
-// These can be used with type assertions for more type-safe error handling
-
-// ResourceNotFoundError indicates a requested resource was not found
+// ResourceNotFoundError indicates a requested resource was not found.
 type ResourceNotFoundError struct {
 	*StorageError
 	ResourceType string
@@ -54,7 +51,7 @@ func NewResourceNotFoundError(resourceType, resourceID string) *ResourceNotFound
 	}
 }
 
-// ComponentNotFoundError is a specific type of ResourceNotFoundError
+// ComponentNotFoundError is a specific type of ResourceNotFoundError.
 type ComponentNotFoundError struct {
 	*ResourceNotFoundError
 	Name    string
@@ -73,7 +70,7 @@ func NewComponentNotFoundError(name, version string) *ComponentNotFoundError {
 	}
 }
 
-// VersionNotFoundError is a specific type of ResourceNotFoundError
+// VersionNotFoundError is a specific type of ResourceNotFoundError.
 type VersionNotFoundError struct {
 	*ResourceNotFoundError
 	ComponentName string
@@ -91,7 +88,7 @@ func NewVersionNotFoundError(componentName, version string) *VersionNotFoundErro
 	}
 }
 
-// ResourceExistsError indicates a resource already exists
+// ResourceExistsError indicates a resource already exists.
 type ResourceExistsError struct {
 	*StorageError
 	ResourceType string
@@ -109,7 +106,7 @@ func NewResourceExistsError(resourceType, resourceID string) *ResourceExistsErro
 	}
 }
 
-// ComponentExistsError is a specific type of ResourceExistsError
+// ComponentExistsError is a specific type of ResourceExistsError.
 type ComponentExistsError struct {
 	*ResourceExistsError
 	Name    string
@@ -127,7 +124,7 @@ func NewComponentExistsError(name, version string) *ComponentExistsError {
 	}
 }
 
-// ValidationError indicates invalid input
+// ValidationError indicates invalid input.
 type ValidationError struct {
 	*StorageError
 	Field  string
@@ -145,7 +142,7 @@ func NewValidationError(field, reason string) *ValidationError {
 	}
 }
 
-// StorageUnavailableError indicates the storage backend is unavailable
+// StorageUnavailableError indicates the storage backend is unavailable.
 type StorageUnavailableError struct {
 	*StorageError
 	Reason string
@@ -161,7 +158,7 @@ func NewStorageUnavailableError(reason string) *StorageUnavailableError {
 	}
 }
 
-// ThrottledError indicates the request was throttled
+// ThrottledError indicates the request was throttled.
 type ThrottledError struct {
 	*StorageUnavailableError
 }
@@ -178,7 +175,7 @@ func NewThrottledError(reason string) *ThrottledError {
 	}
 }
 
-// ConfigurationError indicates an invalid configuration
+// ConfigurationError indicates an invalid configuration.
 type ConfigurationError struct {
 	*StorageError
 	ConfigItem string
@@ -194,7 +191,7 @@ func NewConfigurationError(configItem, reason string) *ConfigurationError {
 	}
 }
 
-// Common error instances for convenience
+// Common error instances for convenience.
 var (
 	ErrComponentNotFound      = NewStorageError("COMPONENT_NOT_FOUND", "component not found")
 	ErrVersionNotFound        = NewStorageError("VERSION_NOT_FOUND", "component version not found")

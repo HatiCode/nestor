@@ -7,7 +7,7 @@ import (
 	"github.com/HatiCode/nestor/catalog/pkg/models"
 )
 
-// ComponentItem represents a component stored in DynamoDB
+// ComponentItem represents a component stored in DynamoDB.
 type ComponentItem struct {
 	// DynamoDB keys
 	PK string `dynamodbav:"PK"`
@@ -58,7 +58,7 @@ type ComponentItem struct {
 	GSI1SK string `dynamodbav:"GSI1SK"`
 }
 
-// ToComponentDefinition converts a DynamoDB item to a ComponentDefinition
+// ToComponentDefinition converts a DynamoDB item to a ComponentDefinition.
 func (item *ComponentItem) ToComponentDefinition() *models.ComponentDefinition {
 	return &models.ComponentDefinition{
 		Metadata: models.ComponentMetadata{
@@ -104,7 +104,7 @@ func (item *ComponentItem) ToComponentDefinition() *models.ComponentDefinition {
 	}
 }
 
-// NewComponentItemFromDefinition creates a new ComponentItem from a ComponentDefinition
+// NewComponentItemFromDefinition creates a new ComponentItem from a ComponentDefinition.
 func NewComponentItemFromDefinition(component *models.ComponentDefinition) *ComponentItem {
 	if component == nil {
 		return nil

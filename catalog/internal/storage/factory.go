@@ -9,14 +9,13 @@ import (
 	"github.com/HatiCode/nestor/shared/pkg/logging"
 )
 
-// StorageConfig defines the configuration for storage backends
+// StorageConfig defines the configuration for storage backends.
 type StorageConfig struct {
 	Type     string                 `yaml:"type" validate:"required,oneof=dynamodb memory postgres"`
 	DynamoDB *DynamoDBStorageConfig `yaml:"dynamodb,omitempty"`
 }
 
-// DynamoDBStorageConfig contains DynamoDB-specific configuration
-// This avoids the import cycle by not importing the dynamodb package directly
+// DynamoDBStorageConfig contains DynamoDB-specific configuration.
 type DynamoDBStorageConfig struct {
 	TableName         string `yaml:"table_name" json:"table_name"`
 	Region            string `yaml:"region" json:"region" validate:"required"`
@@ -29,7 +28,7 @@ type DynamoDBStorageConfig struct {
 	VerifyTableSchema bool   `yaml:"verify_table_schema" json:"verify_table_schema"`
 }
 
-// Validate validates the storage configuration
+// Validates the storage configuration.
 func (c *StorageConfig) Validate() error {
 	if c == nil {
 		return NewConfigurationError("storage", "configuration is nil")
@@ -46,7 +45,6 @@ func (c *StorageConfig) Validate() error {
 		}
 		return c.DynamoDB.Validate()
 	case "memory":
-		// No additional validation needed for memory store
 		return nil
 	case "postgres":
 		return NewConfigurationError("type", "PostgreSQL implementation not yet available")
@@ -55,7 +53,7 @@ func (c *StorageConfig) Validate() error {
 	}
 }
 
-// Validate validates the DynamoDB configuration
+// Validates the DynamoDB configuration.
 func (c *DynamoDBStorageConfig) Validate() error {
 	if c == nil {
 		return NewConfigurationError("dynamodb", "DynamoDB config cannot be nil")
@@ -73,7 +71,6 @@ func (c *DynamoDBStorageConfig) Validate() error {
 		return NewConfigurationError("max_batch_size", "max_batch_size must be between 1 and 25")
 	}
 
-	// Validate query timeout if provided
 	if c.QueryTimeout != "" {
 		_, err := time.ParseDuration(c.QueryTimeout)
 		if err != nil {
@@ -81,12 +78,10 @@ func (c *DynamoDBStorageConfig) Validate() error {
 		}
 	}
 
-	// Validate table name if provided
 	if c.TableName != "" && len(c.TableName) < 3 {
 		return NewConfigurationError("table_name", "table name must be at least 3 characters long")
 	}
 
-	// Validate endpoint URL if provided
 	if c.Endpoint != "" && !strings.HasPrefix(c.Endpoint, "http") {
 		return NewConfigurationError("endpoint", "endpoint must be a valid URL starting with http:// or https://")
 	}
@@ -94,15 +89,15 @@ func (c *DynamoDBStorageConfig) Validate() error {
 	return nil
 }
 
-// ComponentStoreFactory is a function type that creates a ComponentStore
+// ComponentStoreFactory is a function type that creates a ComponentStore.
 type ComponentStoreFactory func(config *StorageConfig, cache cache.Cache, logger logging.Logger) (ComponentStore, error)
 
-// Registry holds the registered component store factories
+// Registry holds the registered component store factories.
 type Registry struct {
 	factories map[string]ComponentStoreFactory
 }
 
-// NewRegistry creates a new registry with optional pre-registered factories
+// NewRegistry creates a new registry with optional pre-registered factories.
 func NewRegistry(factories map[string]ComponentStoreFactory) *Registry {
 	if factories == nil {
 		factories = make(map[string]ComponentStoreFactory)
@@ -112,12 +107,12 @@ func NewRegistry(factories map[string]ComponentStoreFactory) *Registry {
 	}
 }
 
-// Register registers a factory for a specific storage type
+// Register registers a factory for a specific storage type.
 func (r *Registry) Register(storageType string, factory ComponentStoreFactory) {
 	r.factories[storageType] = factory
 }
 
-// Create creates a new ComponentStore based on configuration
+// Create creates a new ComponentStore based on configuration.
 func (r *Registry) Create(config *StorageConfig, cache cache.Cache, logger logging.Logger) (ComponentStore, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid storage configuration: %w", err)
@@ -136,16 +131,16 @@ func (r *Registry) Create(config *StorageConfig, cache cache.Cache, logger loggi
 	return store, nil
 }
 
-// DefaultRegistry is a convenience instance for backward compatibility
+// DefaultRegistry is a convenience instance for backward compatibility.
 var DefaultRegistry = NewRegistry(nil)
 
-// RegisterComponentStoreFactory registers a factory with the default registry
+// RegisterComponentStoreFactory registers a factory with the default registry.
 // This is provided for backward compatibility
 func RegisterComponentStoreFactory(storageType string, factory ComponentStoreFactory) {
 	DefaultRegistry.Register(storageType, factory)
 }
 
-// NewComponentStore creates a new ComponentStore using the default registry
+// NewComponentStore creates a new ComponentStore using the default registry.
 // This is provided for backward compatibility
 func NewComponentStore(config *StorageConfig, cache cache.Cache, logger logging.Logger) (ComponentStore, error) {
 	return DefaultRegistry.Create(config, cache, logger)

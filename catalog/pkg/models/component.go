@@ -223,7 +223,6 @@ func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
 }
 
 func (c *ComponentDefinition) Validate() error {
-	// Validate required metadata fields
 	if c.Metadata.Name == "" {
 		return ErrInvalidComponentName
 	}
@@ -231,12 +230,10 @@ func (c *ComponentDefinition) Validate() error {
 		return ErrInvalidComponentVersion
 	}
 
-	// Validate semantic version format
 	if _, err := ParseSemanticVersion(c.Metadata.Version); err != nil {
 		return fmt.Errorf("invalid semantic version format: %w", err)
 	}
 
-	// Validate required provider and category
 	if c.Metadata.Provider == "" {
 		return fmt.Errorf("provider is required")
 	}
@@ -244,17 +241,14 @@ func (c *ComponentDefinition) Validate() error {
 		return fmt.Errorf("category is required")
 	}
 
-	// Validate deployment engines
 	if len(c.Metadata.DeploymentEngines) == 0 {
 		return ErrNoDeploymentEngines
 	}
 
-	// Validate required inputs and outputs
 	if err := c.validateInputsAndOutputs(); err != nil {
 		return err
 	}
 
-	// Validate engine specs
 	if err := c.validateEngineSpecs(); err != nil {
 		return err
 	}
@@ -262,9 +256,7 @@ func (c *ComponentDefinition) Validate() error {
 	return nil
 }
 
-// Helper validation methods
 func (c *ComponentDefinition) validateInputsAndOutputs() error {
-	// Validate required inputs
 	for i, input := range c.Spec.RequiredInputs {
 		if input.Name == "" {
 			return fmt.Errorf("required input at index %d is missing name", i)
@@ -277,7 +269,6 @@ func (c *ComponentDefinition) validateInputsAndOutputs() error {
 		}
 	}
 
-	// Validate optional inputs
 	for i, input := range c.Spec.OptionalInputs {
 		if input.Name == "" {
 			return fmt.Errorf("optional input at index %d is missing name", i)
@@ -287,7 +278,6 @@ func (c *ComponentDefinition) validateInputsAndOutputs() error {
 		}
 	}
 
-	// Validate outputs
 	for i, output := range c.Spec.Outputs {
 		if output.Name == "" {
 			return fmt.Errorf("output at index %d is missing name", i)
@@ -304,7 +294,6 @@ func (c *ComponentDefinition) validateInputsAndOutputs() error {
 }
 
 func (c *ComponentDefinition) validateEngineSpecs() error {
-	// Ensure engine specs exist for all declared deployment engines
 	for _, engine := range c.Metadata.DeploymentEngines {
 		spec, exists := c.Spec.EngineSpecs[engine]
 		if !exists {

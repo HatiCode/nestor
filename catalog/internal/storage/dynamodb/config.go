@@ -41,12 +41,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("query_timeout must be positive")
 	}
 
-	// Validate table name is not empty when not using default
 	if c.TableName != "" && len(c.TableName) < 3 {
 		return fmt.Errorf("table_name must be at least 3 characters long")
 	}
 
-	// Validate endpoint URL if provided
 	if c.Endpoint != "" && !strings.HasPrefix(c.Endpoint, "http") {
 		return fmt.Errorf("endpoint must be a valid URL starting with http:// or https://")
 	}
