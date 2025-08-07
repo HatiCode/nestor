@@ -58,113 +58,129 @@ type ComponentItem struct {
 	GSI1SK string `dynamodbav:"GSI1SK"`
 }
 
-// ToComponentDefinition converts a DynamoDB item to a ComponentDefinition.
-func (item *ComponentItem) ToComponentDefinition() *models.ComponentDefinition {
-	return &models.ComponentDefinition{
+// ToComponent converts a DynamoDB item to a Component.
+func (item *ComponentItem) ToComponent() *models.Component {
+	// For MVP, we'll map the complex DynamoDB structure to the simplified Component model
+	// Combine RequiredInputs and OptionalInputs into a single Inputs slice
+	inputs := make([]models.InputSpec, 0, len(item.RequiredInputs)+len(item.OptionalInputs))
+	inputs = append(inputs, item.RequiredInputs...)
+	inputs = append(inputs, item.OptionalInputs...)
+
+	// Create a simplified deployment spec from the first engine spec
+	deployment := models.DeploymentSpec{
+		Engine:  "terraform", // Default for MVP
+		Version: "1.0.0",     // Default for MVP
+		Config:  make(map[string]any),
+	}
+
+	// If we have engine specs, use the first one
+	if len(item.EngineSpecs) > 0 {
+		for engine, spec := range item.EngineSpecs {
+			deployment.Engine = engine
+			deployment.Version = spec.Version
+			deployment.Config = spec.Config
+			break // Use first engine spec for MVP
+		}
+	}
+
+	return &models.Component{
+		Name:        item.Name,
+		Version:     item.Version,
+		Provider:    item.Provider,
+		Category:    item.Category,
+		Description: item.Description,
+		Inputs:      inputs,
+		Outputs:     item.Outputs,
+		Deployment:  deployment,
 		Metadata: models.ComponentMetadata{
-			Name:              item.Name,
-			DisplayName:       item.DisplayName,
-			Description:       item.Description,
-			Version:           item.Version,
-			Provider:          item.Provider,
-			Category:          item.Category,
-			SubCategory:       item.SubCategory,
-			ResourceType:      item.ResourceType,
-			DeploymentEngines: item.DeploymentEngines,
-			Maturity:          models.MaturityLevel(item.Maturity),
-			Maintainers:       item.Maintainers,
-			Documentation:     item.Documentation,
-			CreatedAt:         item.CreatedAt,
-			UpdatedAt:         item.UpdatedAt,
-			DeprecatedAt:      item.DeprecatedAt,
-			GitRepository:     item.GitRepository,
-			GitPath:           item.GitPath,
-			GitCommit:         item.GitCommit,
-			GitBranch:         item.GitBranch,
-			Labels:            item.Labels,
-			Annotations:       item.Annotations,
+			GitCommit:    item.GitCommit,
+			Deprecated:   item.DeprecatedAt != nil,
+			DeprecatedAt: item.DeprecatedAt,
 		},
-		Spec: models.ComponentSpec{
-			Dependencies:   item.Dependencies,
-			Provides:       item.Provides,
-			ConflictsWith:  item.ConflictsWith,
-			RequiredInputs: item.RequiredInputs,
-			OptionalInputs: item.OptionalInputs,
-			Outputs:        item.Outputs,
-			EngineSpecs:    item.EngineSpecs,
-		},
-		Status: models.ComponentStatus{
-			State:            models.ComponentState(item.State),
-			UsageCount:       item.UsageCount,
-			LastUsed:         item.LastUsed,
-			ValidationStatus: models.ValidationStatus(item.ValidationStatus),
-			HealthStatus:     models.HealthStatus(item.HealthStatus),
-			Stats:            item.Stats,
-		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
 	}
 }
 
-// NewComponentItemFromDefinition creates a new ComponentItem from a ComponentDefinition.
-func NewComponentItemFromDefinition(component *models.ComponentDefinition) *ComponentItem {
+// NewComponentItemFromComponent creates a new ComponentItem from a Component.
+func NewComponentItemFromComponent(component *models.Component) *ComponentItem {
 	if component == nil {
 		return nil
 	}
 
 	now := time.Now()
-	if component.Metadata.CreatedAt.IsZero() {
-		component.Metadata.CreatedAt = now
+	if component.CreatedAt.IsZero() {
+		component.CreatedAt = now
 	}
-	component.Metadata.UpdatedAt = now
+	component.UpdatedAt = now
+
+	// For MVP, split inputs into required and optional based on validation rules
+	var requiredInputs, optionalInputs []models.InputSpec
+	for _, input := range component.Inputs {
+		if input.Validation.Required {
+			requiredInputs = append(requiredInputs, input)
+		} else {
+			optionalInputs = append(optionalInputs, input)
+		}
+	}
+
+	// Create engine specs from deployment spec
+	engineSpecs := make(map[string]models.EngineSpec)
+	engineSpecs[component.Deployment.Engine] = models.EngineSpec{
+		Engine:  component.Deployment.Engine,
+		Version: component.Deployment.Version,
+		Config:  component.Deployment.Config,
+	}
 
 	item := &ComponentItem{
-		// Component metadata
-		Name:              component.Metadata.Name,
-		DisplayName:       component.Metadata.DisplayName,
-		Description:       component.Metadata.Description,
-		Version:           component.Metadata.Version,
-		Provider:          component.Metadata.Provider,
-		Category:          component.Metadata.Category,
-		SubCategory:       component.Metadata.SubCategory,
-		ResourceType:      component.Metadata.ResourceType,
-		DeploymentEngines: component.Metadata.DeploymentEngines,
-		Maturity:          string(component.Metadata.Maturity),
-		Maintainers:       component.Metadata.Maintainers,
-		Documentation:     component.Metadata.Documentation,
-		CreatedAt:         component.Metadata.CreatedAt,
-		UpdatedAt:         component.Metadata.UpdatedAt,
+		// Component metadata - map from simplified model
+		Name:              component.Name,
+		DisplayName:       component.Name, // Use name as display name for MVP
+		Description:       component.Description,
+		Version:           component.Version,
+		Provider:          component.Provider,
+		Category:          component.Category,
+		SubCategory:       "",                                    // Not in MVP model
+		ResourceType:      "infrastructure",                      // Default for MVP
+		DeploymentEngines: []string{component.Deployment.Engine}, // Single engine for MVP
+		Maturity:          "stable",                              // Default for MVP
+		Maintainers:       []string{},                            // Empty for MVP
+		Documentation:     []models.DocLink{},                    // Empty for MVP
+		CreatedAt:         component.CreatedAt,
+		UpdatedAt:         component.UpdatedAt,
 		DeprecatedAt:      component.Metadata.DeprecatedAt,
-		GitRepository:     component.Metadata.GitRepository,
-		GitPath:           component.Metadata.GitPath,
+		GitRepository:     "", // Not in MVP model
+		GitPath:           "", // Not in MVP model
 		GitCommit:         component.Metadata.GitCommit,
-		GitBranch:         component.Metadata.GitBranch,
-		Labels:            component.Metadata.Labels,
-		Annotations:       component.Metadata.Annotations,
+		GitBranch:         "",                      // Not in MVP model
+		Labels:            make(map[string]string), // Empty for MVP
+		Annotations:       make(map[string]string), // Empty for MVP
 
-		// Component spec
-		Dependencies:   component.Spec.Dependencies,
-		Provides:       component.Spec.Provides,
-		ConflictsWith:  component.Spec.ConflictsWith,
-		RequiredInputs: component.Spec.RequiredInputs,
-		OptionalInputs: component.Spec.OptionalInputs,
-		Outputs:        component.Spec.Outputs,
-		EngineSpecs:    component.Spec.EngineSpecs,
+		// Component spec - map from simplified model
+		Dependencies:   []models.Dependency{}, // Empty for MVP
+		Provides:       []string{},            // Empty for MVP
+		ConflictsWith:  []string{},            // Empty for MVP
+		RequiredInputs: requiredInputs,
+		OptionalInputs: optionalInputs,
+		Outputs:        component.Outputs,
+		EngineSpecs:    engineSpecs,
 
-		// Component status
-		State:            string(component.Status.State),
-		UsageCount:       component.Status.UsageCount,
-		LastUsed:         component.Status.LastUsed,
-		ValidationStatus: string(component.Status.ValidationStatus),
-		HealthStatus:     string(component.Status.HealthStatus),
-		Stats:            component.Status.Stats,
+		// Component status - defaults for MVP
+		State:            "active",                // Default for MVP
+		UsageCount:       0,                       // Default for MVP
+		LastUsed:         nil,                     // Default for MVP
+		ValidationStatus: "valid",                 // Default for MVP
+		HealthStatus:     "healthy",               // Default for MVP
+		Stats:            models.ComponentStats{}, // Empty for MVP
 	}
 
 	// Set the DynamoDB keys
-	item.PK = fmt.Sprintf("COMPONENT#%s", component.Metadata.Name)
-	item.SK = fmt.Sprintf("VERSION#%s", component.Metadata.Version)
+	item.PK = fmt.Sprintf("COMPONENT#%s", component.Name)
+	item.SK = fmt.Sprintf("VERSION#%s", component.Version)
 
 	// Set GSI keys for querying
-	item.GSI1PK = fmt.Sprintf("PROVIDER#%s", component.Metadata.Provider)
-	item.GSI1SK = fmt.Sprintf("CATEGORY#%s", component.Metadata.Category)
+	item.GSI1PK = fmt.Sprintf("PROVIDER#%s", component.Provider)
+	item.GSI1SK = fmt.Sprintf("CATEGORY#%s", component.Category)
 
 	return item
 }

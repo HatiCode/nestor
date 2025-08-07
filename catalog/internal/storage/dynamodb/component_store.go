@@ -66,7 +66,7 @@ func NewComponentStore(config *storage.StorageConfig, cache cache.Cache, logger 
 }
 
 // GetComponent retrieves a specific component by name and version.
-func (s *componentStore) GetComponent(ctx context.Context, name, version string) (*models.ComponentDefinition, error) {
+func (s *componentStore) GetComponent(ctx context.Context, name, version string) (*models.Component, error) {
 	if name == "" {
 		return nil, storage.NewValidationError("name", "component name is required")
 	}
@@ -79,7 +79,7 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 	if s.cache != nil {
 		cacheKey := s.buildComponentCacheKey(name, version)
 		if cached := s.cache.Get(ctx, cacheKey); cached != nil {
-			if component, ok := cached.(*models.ComponentDefinition); ok {
+			if component, ok := cached.(*models.Component); ok {
 				s.logger.DebugContext(ctx, "component found in cache", "name", name, "version", version)
 				return component, nil
 			}
@@ -111,7 +111,7 @@ func (s *componentStore) GetComponent(ctx context.Context, name, version string)
 		return nil, fmt.Errorf("failed to unmarshal component: %w", err)
 	}
 
-	component := dbItem.ToComponentDefinition()
+	component := dbItem.ToComponent()
 
 	if s.cache != nil {
 		cacheKey := s.buildComponentCacheKey(name, version)
@@ -143,14 +143,14 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 		return nil, s.wrapDynamoDBError(err, "ListComponents", "", "")
 	}
 
-	components := make([]*models.ComponentDefinition, 0, len(result.Items))
+	components := make([]*models.Component, 0, len(result.Items))
 	for _, item := range result.Items {
 		var dbItem ComponentItem
 		if err := attributevalue.UnmarshalMap(item, &dbItem); err != nil {
 			s.logger.WarnContext(ctx, "failed to unmarshal component", "error", err)
 			continue
 		}
-		components = append(components, dbItem.ToComponentDefinition())
+		components = append(components, dbItem.ToComponent())
 	}
 
 	components = s.applyPostScanFilters(components, &filters)
@@ -175,19 +175,21 @@ func (s *componentStore) ListComponents(ctx context.Context, filters storage.Com
 }
 
 // StoreComponent stores a component definition.
-func (s *componentStore) StoreComponent(ctx context.Context, component *models.ComponentDefinition) error {
+func (s *componentStore) StoreComponent(ctx context.Context, component *models.Component) error {
 	if component == nil {
 		return storage.NewValidationError("component", "component is required")
 	}
 
 	s.logger.InfoContext(ctx, "storing component",
-		"name", component.Metadata.Name, "version", component.Metadata.Version)
+		"name", component.Name, "version", component.Version)
 
-	if err := component.Validate(); err != nil {
+	// For MVP, we'll use the validator from the models package
+	validator := models.NewComponentValidator()
+	if err := validator.Validate(component); err != nil {
 		return storage.NewValidationError("component", fmt.Sprintf("invalid component: %v", err))
 	}
 
-	dbItem := NewComponentItemFromDefinition(component)
+	dbItem := NewComponentItemFromComponent(component)
 	item, err := attributevalue.MarshalMap(dbItem)
 	if err != nil {
 		return fmt.Errorf("failed to marshal component: %w", err)
@@ -199,14 +201,14 @@ func (s *componentStore) StoreComponent(ctx context.Context, component *models.C
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to store component",
-			"name", component.Metadata.Name, "version", component.Metadata.Version, "error", err)
-		return s.wrapDynamoDBError(err, "StoreComponent", component.Metadata.Name, component.Metadata.Version)
+			"name", component.Name, "version", component.Version, "error", err)
+		return s.wrapDynamoDBError(err, "StoreComponent", component.Name, component.Version)
 	}
 
-	s.invalidateComponentCaches(ctx, component.Metadata.Name)
+	s.invalidateComponentCaches(ctx, component.Name)
 
 	s.logger.InfoContext(ctx, "component stored successfully",
-		"name", component.Metadata.Name, "version", component.Metadata.Version)
+		"name", component.Name, "version", component.Version)
 
 	return nil
 }
@@ -241,11 +243,11 @@ func (s *componentStore) GetVersionHistory(ctx context.Context, name string) ([]
 			continue
 		}
 
-		component := dbItem.ToComponentDefinition()
+		component := dbItem.ToComponent()
 		version := models.ComponentVersion{
-			ComponentName: component.Metadata.Name,
-			Version:       component.Metadata.Version,
-			CreatedAt:     component.Metadata.CreatedAt,
+			ComponentName: component.Name,
+			Version:       component.Version,
+			CreatedAt:     component.CreatedAt,
 			Status:        models.VersionStatusActive, // Simplified for MVP
 		}
 		versions = append(versions, version)
@@ -420,12 +422,12 @@ func (s *componentStore) buildScanInput(filters *storage.ComponentFilters, pagin
 	return input
 }
 
-func (s *componentStore) applyPostScanFilters(components []*models.ComponentDefinition, filters *storage.ComponentFilters) []*models.ComponentDefinition {
+func (s *componentStore) applyPostScanFilters(components []*models.Component, filters *storage.ComponentFilters) []*models.Component {
 	if filters == nil {
 		return components
 	}
 
-	var filtered []*models.ComponentDefinition
+	var filtered []*models.Component
 	for _, component := range components {
 		if s.matchesFilters(component, filters) {
 			filtered = append(filtered, component)
@@ -434,30 +436,31 @@ func (s *componentStore) applyPostScanFilters(components []*models.ComponentDefi
 	return filtered
 }
 
-func (s *componentStore) matchesFilters(component *models.ComponentDefinition, filters *storage.ComponentFilters) bool {
+func (s *componentStore) matchesFilters(component *models.Component, filters *storage.ComponentFilters) bool {
 	if filters.ActiveOnly && component.IsDeprecated() {
 		return false
 	}
 
-	if filters.CreatedAfter != nil && component.Metadata.CreatedAt.Before(*filters.CreatedAfter) {
+	if filters.CreatedAfter != nil && component.CreatedAt.Before(*filters.CreatedAfter) {
 		return false
 	}
-	if filters.CreatedBefore != nil && component.Metadata.CreatedAt.After(*filters.CreatedBefore) {
+	if filters.CreatedBefore != nil && component.CreatedAt.After(*filters.CreatedBefore) {
 		return false
 	}
 
-	if len(filters.Labels) > 0 {
-		for key, value := range filters.Labels {
-			if !component.HasLabel(key, value) {
-				return false
-			}
-		}
-	}
+	// Labels filtering removed for MVP - can be added back later if needed
+	// if len(filters.Labels) > 0 {
+	//     for key, value := range filters.Labels {
+	//         if !component.HasLabel(key, value) {
+	//             return false
+	//         }
+	//     }
+	// }
 
 	return true
 }
 
-func (s *componentStore) applySorting(components []*models.ComponentDefinition, sortBy storage.SortField, sortOrder storage.SortOrder) []*models.ComponentDefinition {
+func (s *componentStore) applySorting(components []*models.Component, sortBy storage.SortField, sortOrder storage.SortOrder) []*models.Component {
 	// Simple sorting implementation for MVP
 	// In production, this should be done at the database level for better performance
 	return components

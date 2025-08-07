@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+// Version represents a component version for history tracking
+type Version struct {
+	Version      string     `json:"version" validate:"required,semver"`
+	CreatedAt    time.Time  `json:"created_at"`
+	GitCommit    string     `json:"git_commit,omitempty"`
+	Deprecated   bool       `json:"deprecated"`
+	DeprecatedAt *time.Time `json:"deprecated_at,omitempty"`
+}
+
 type ComponentVersion struct {
 	ComponentName   string              `json:"component_name"`
 	Version         string              `json:"version"`
@@ -271,6 +280,50 @@ func (v *SemanticVersionInfo) NextPatch() *SemanticVersionInfo {
 		Build:      "",
 		Raw:        fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch+1),
 	}
+}
+
+// VersionHistory represents the version history of a component
+type VersionHistory struct {
+	ComponentName string    `json:"component_name" validate:"required"`
+	Versions      []Version `json:"versions"`
+	TotalCount    int       `json:"total_count"`
+}
+
+// GetLatestVersion returns the latest non-deprecated version, or the latest deprecated version if all are deprecated
+func (vh *VersionHistory) GetLatestVersion() *Version {
+	if len(vh.Versions) == 0 {
+		return nil
+	}
+
+	// First try to find the latest non-deprecated version
+	for _, version := range vh.Versions {
+		if !version.Deprecated {
+			return &version
+		}
+	}
+
+	// If all versions are deprecated, return the first one (should be the latest)
+	return &vh.Versions[0]
+}
+
+// GetLatestNonDeprecatedVersion returns the latest non-deprecated version
+func (vh *VersionHistory) GetLatestNonDeprecatedVersion() *Version {
+	for _, version := range vh.Versions {
+		if !version.Deprecated {
+			return &version
+		}
+	}
+	return nil
+}
+
+// IsDeprecated returns true if the version is deprecated
+func (v *Version) IsDeprecated() bool {
+	return v.Deprecated || v.DeprecatedAt != nil
+}
+
+// GetSemanticVersion parses and returns the semantic version information
+func (v *Version) GetSemanticVersion() (*SemanticVersionInfo, error) {
+	return ParseSemanticVersion(v.Version)
 }
 
 func (cv *ComponentVersion) GetID() string {

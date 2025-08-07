@@ -2,71 +2,35 @@ package models
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/HatiCode/nestor/shared/pkg/json"
+	"github.com/go-playground/validator/v10"
 )
 
-type ComponentDefinition struct {
-	Metadata ComponentMetadata `json:"metadata"`
-	Spec     ComponentSpec     `json:"spec"`
-	Status   ComponentStatus   `json:"status"`
+// Component represents a simplified infrastructure component definition for the MVP
+type Component struct {
+	Name        string            `json:"name" validate:"required,dns1123"`
+	Version     string            `json:"version" validate:"required,semver"`
+	Provider    string            `json:"provider" validate:"required"`
+	Category    string            `json:"category" validate:"required"`
+	Description string            `json:"description"`
+	Inputs      []InputSpec       `json:"inputs" validate:"required,min=1"`
+	Outputs     []OutputSpec      `json:"outputs" validate:"required,min=1"`
+	Deployment  DeploymentSpec    `json:"deployment" validate:"required"`
+	Metadata    ComponentMetadata `json:"metadata"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
+// ComponentMetadata contains additional metadata for the component
 type ComponentMetadata struct {
-	Name              string            `json:"name" validate:"required,dns1123"`
-	DisplayName       string            `json:"display_name" validate:"required"`
-	Description       string            `json:"description" validate:"required"`
-	Version           string            `json:"version" validate:"required,semver"`
-	Provider          string            `json:"provider" validate:"required"`
-	Category          string            `json:"category" validate:"required"`
-	SubCategory       string            `json:"sub_category"`
-	ResourceType      string            `json:"resource_type" validate:"required"`
-	DeploymentEngines []string          `json:"deployment_engines" validate:"required,min=1"`
-	Maturity          MaturityLevel     `json:"maturity" validate:"required"` // alpha, beta, stable, deprecated
-	Maintainers       []string          `json:"maintainers" validate:"required,min=1"`
-	Documentation     []DocLink         `json:"documentation"`
-	CostEstimate      CostEstimate      `json:"cost_estimate"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	DeprecatedAt      *time.Time        `json:"deprecated_at,omitempty"`
-	GitRepository     string            `json:"git_repository"`
-	GitPath           string            `json:"git_path"`
-	GitCommit         string            `json:"git_commit"`
-	GitBranch         string            `json:"git_branch"`
-	Labels            map[string]string `json:"labels"`
-	Annotations       map[string]string `json:"annotations"`
+	GitCommit    string     `json:"git_commit,omitempty"`
+	Deprecated   bool       `json:"deprecated"`
+	DeprecatedAt *time.Time `json:"deprecated_at,omitempty"`
 }
 
-type ComponentSpec struct {
-	Dependencies   []Dependency          `json:"dependencies"`
-	Provides       []string              `json:"provides"`
-	ConflictsWith  []string              `json:"conflicts_with"`
-	RequiredInputs []InputSpec           `json:"required_inputs"`
-	OptionalInputs []InputSpec           `json:"optional_inputs"`
-	Outputs        []OutputSpec          `json:"outputs"`
-	EngineSpecs    map[string]EngineSpec `json:"engine_specs"`
-}
-
-type ComponentStatus struct {
-	State            ComponentState   `json:"state"`
-	UsageCount       int64            `json:"usage_count"`
-	LastUsed         *time.Time       `json:"last_used"`
-	ValidationStatus ValidationStatus `json:"validation_status"`
-	HealthStatus     HealthStatus     `json:"health_status"`
-	Stats            ComponentStats   `json:"stats"`
-}
-
-type Dependency struct {
-	Name        string `json:"name" validate:"required"`
-	Type        string `json:"type" validate:"required"`
-	Version     string `json:"version" validate:"required"`
-	Optional    bool   `json:"optional"`
-	Description string `json:"description"`
-	Condition   string `json:"condition,omitempty"`
-}
-
+// InputSpec defines an input parameter specification
 type InputSpec struct {
 	Name        string     `json:"name" validate:"required"`
 	Type        string     `json:"type" validate:"required"`
@@ -74,26 +38,24 @@ type InputSpec struct {
 	Default     any        `json:"default,omitempty"`
 	Validation  Validation `json:"validation"`
 	Sensitive   bool       `json:"sensitive"`
-	Examples    []string   `json:"examples"`
-	Group       string     `json:"group"`
 }
 
+// OutputSpec defines an output parameter specification
 type OutputSpec struct {
 	Name        string `json:"name" validate:"required"`
 	Type        string `json:"type" validate:"required"`
 	Description string `json:"description" validate:"required"`
 	Sensitive   bool   `json:"sensitive"`
-	Export      bool   `json:"export"`
 }
 
-type EngineSpec struct {
-	Engine       string         `json:"engine"`
-	Version      string         `json:"version"`
-	Template     string         `json:"template"`
-	Config       map[string]any `json:"config"`
-	Dependencies []string       `json:"dependencies"`
+// DeploymentSpec defines deployment engine specifications
+type DeploymentSpec struct {
+	Engine  string         `json:"engine" validate:"required"`
+	Version string         `json:"version" validate:"required"`
+	Config  map[string]any `json:"config"`
 }
 
+// Validation defines validation rules for input parameters
 type Validation struct {
 	Required  bool     `json:"required"`
 	MinLength *int     `json:"min_length,omitempty"`
@@ -102,64 +64,15 @@ type Validation struct {
 	Enum      []string `json:"enum,omitempty"`
 	Min       *float64 `json:"min,omitempty"`
 	Max       *float64 `json:"max,omitempty"`
-	Custom    string   `json:"custom,omitempty"`
 }
 
-type ValidationRule struct {
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Expression   string `json:"expression"`
-	ErrorMessage string `json:"error_message"`
-}
-
-type MaturityLevel string
-
-const (
-	MaturityAlpha      MaturityLevel = "alpha"
-	MaturityBeta       MaturityLevel = "beta"
-	MaturityStable     MaturityLevel = "stable"
-	MaturityDeprecated MaturityLevel = "deprecated"
-)
-
-type ComponentState string
-
-const (
-	ComponentStateActive     ComponentState = "active"
-	ComponentStateDeprecated ComponentState = "deprecated"
-	ComponentStateArchived   ComponentState = "archived"
-)
-
-type ValidationStatus string
-
-const (
-	ValidationStatusValid   ValidationStatus = "valid"
-	ValidationStatusInvalid ValidationStatus = "invalid"
-	ValidationStatusPending ValidationStatus = "pending"
-	ValidationStatusUnknown ValidationStatus = "unknown"
-)
-
-type HealthStatus string
-
-const (
-	HealthStatusHealthy   HealthStatus = "healthy"
-	HealthStatusUnhealthy HealthStatus = "unhealthy"
-	HealthStatusUnknown   HealthStatus = "unknown"
-)
-
-type DocLink struct {
-	Title string `json:"title" validate:"required"`
-	URL   string `json:"url" validate:"required"`
-	Type  string `json:"type"`
-}
-
-type CostEstimate struct {
-	Currency    string    `json:"currency"`
-	HourlyCost  float64   `json:"hourly_cost"`
-	MonthlyCost float64   `json:"monthly_cost"`
-	CostModel   string    `json:"cost_model"`
-	LastUpdated time.Time `json:"last_updated"`
-	Region      string    `json:"region"`
-	Notes       string    `json:"notes"`
+// Legacy types for backward compatibility with existing storage layer
+type EngineSpec struct {
+	Engine       string         `json:"engine"`
+	Version      string         `json:"version"`
+	Template     string         `json:"template"`
+	Config       map[string]any `json:"config"`
+	Dependencies []string       `json:"dependencies"`
 }
 
 type ComponentStats struct {
@@ -172,47 +85,52 @@ type ComponentStats struct {
 	PopularityScore       float64    `json:"popularity_score"`
 }
 
-func (c *ComponentDefinition) GetID() string {
-	return c.Metadata.Name + ":" + c.Metadata.Version
+type DocLink struct {
+	Title string `json:"title" validate:"required"`
+	URL   string `json:"url" validate:"required"`
+	Type  string `json:"type"`
 }
 
-func (c *ComponentDefinition) IsDeprecated() bool {
-	return c.Metadata.DeprecatedAt != nil || c.Metadata.Maturity == MaturityDeprecated
+type Dependency struct {
+	Name        string `json:"name" validate:"required"`
+	Type        string `json:"type" validate:"required"`
+	Version     string `json:"version" validate:"required"`
+	Optional    bool   `json:"optional"`
+	Description string `json:"description"`
+	Condition   string `json:"condition,omitempty"`
 }
 
-func (c *ComponentDefinition) IsStable() bool {
-	return c.Metadata.Maturity == MaturityStable
+// ComponentValidator provides validation functionality for components
+type ComponentValidator struct {
+	validator *validator.Validate
 }
 
-func (c *ComponentDefinition) SupportsEngine(engine string) bool {
-	return slices.Contains(c.Metadata.DeploymentEngines, engine)
-}
+// NewComponentValidator creates a new component validator with custom validation rules
+func NewComponentValidator() *ComponentValidator {
+	v := validator.New()
 
-func (c *ComponentDefinition) GetEngineSpec(engine string) (*EngineSpec, bool) {
-	spec, exists := c.Spec.EngineSpecs[engine]
-	return &spec, exists
-}
+	// Register custom validation functions
+	v.RegisterValidation("semver", validateSemanticVersion)
+	v.RegisterValidation("dns1123", validateDNS1123)
 
-func (c *ComponentDefinition) HasLabel(key, value string) bool {
-	if c.Metadata.Labels == nil {
-		return false
+	return &ComponentValidator{
+		validator: v,
 	}
-	labelValue, exists := c.Metadata.Labels[key]
-	return exists && labelValue == value
 }
 
-func (c *ComponentDefinition) GetDependenciesOfType(depType string) []Dependency {
-	var result []Dependency
-	for _, dep := range c.Spec.Dependencies {
-		if dep.Type == depType {
-			result = append(result, dep)
-		}
-	}
-	return result
+// GetID returns a unique identifier for the component
+func (c *Component) GetID() string {
+	return c.Name + ":" + c.Version
 }
 
-func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
-	type Alias ComponentDefinition
+// IsDeprecated returns true if the component is deprecated
+func (c *Component) IsDeprecated() bool {
+	return c.Metadata.Deprecated || c.Metadata.DeprecatedAt != nil
+}
+
+// MarshalJSON adds the ID field to the JSON output
+func (c *Component) MarshalJSON() ([]byte, error) {
+	type Alias Component
 	return json.ToJSON(&struct {
 		*Alias
 		ID string `json:"id"`
@@ -222,63 +140,46 @@ func (c *ComponentDefinition) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (c *ComponentDefinition) Validate() error {
-	if c.Metadata.Name == "" {
-		return ErrInvalidComponentName
-	}
-	if c.Metadata.Version == "" {
-		return ErrInvalidComponentVersion
+// Validate validates a component according to the business rules
+func (cv *ComponentValidator) Validate(component *Component) error {
+	if component == nil {
+		return fmt.Errorf("component cannot be nil")
 	}
 
-	if _, err := ParseSemanticVersion(c.Metadata.Version); err != nil {
-		return fmt.Errorf("invalid semantic version format: %w", err)
+	// Perform struct validation
+	if err := cv.validator.Struct(component); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	if c.Metadata.Provider == "" {
-		return fmt.Errorf("provider is required")
-	}
-	if c.Metadata.Category == "" {
-		return fmt.Errorf("category is required")
-	}
-
-	if len(c.Metadata.DeploymentEngines) == 0 {
-		return ErrNoDeploymentEngines
-	}
-
-	if err := c.validateInputsAndOutputs(); err != nil {
+	// Additional business logic validation
+	if err := cv.validateInputsAndOutputs(component); err != nil {
 		return err
 	}
 
-	if err := c.validateEngineSpecs(); err != nil {
+	if err := cv.validateDeploymentSpec(component); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c *ComponentDefinition) validateInputsAndOutputs() error {
-	for i, input := range c.Spec.RequiredInputs {
+// validateInputsAndOutputs validates input and output specifications
+func (cv *ComponentValidator) validateInputsAndOutputs(component *Component) error {
+	// Validate inputs
+	for i, input := range component.Inputs {
 		if input.Name == "" {
-			return fmt.Errorf("required input at index %d is missing name", i)
+			return fmt.Errorf("input at index %d is missing name", i)
 		}
 		if input.Type == "" {
-			return fmt.Errorf("required input '%s' is missing type", input.Name)
+			return fmt.Errorf("input '%s' is missing type", input.Name)
 		}
 		if input.Description == "" {
-			return fmt.Errorf("required input '%s' is missing description", input.Name)
+			return fmt.Errorf("input '%s' is missing description", input.Name)
 		}
 	}
 
-	for i, input := range c.Spec.OptionalInputs {
-		if input.Name == "" {
-			return fmt.Errorf("optional input at index %d is missing name", i)
-		}
-		if input.Type == "" {
-			return fmt.Errorf("optional input '%s' is missing type", input.Name)
-		}
-	}
-
-	for i, output := range c.Spec.Outputs {
+	// Validate outputs
+	for i, output := range component.Outputs {
 		if output.Name == "" {
 			return fmt.Errorf("output at index %d is missing name", i)
 		}
@@ -293,23 +194,46 @@ func (c *ComponentDefinition) validateInputsAndOutputs() error {
 	return nil
 }
 
-func (c *ComponentDefinition) validateEngineSpecs() error {
-	for _, engine := range c.Metadata.DeploymentEngines {
-		spec, exists := c.Spec.EngineSpecs[engine]
-		if !exists {
-			return fmt.Errorf("missing engine spec for declared deployment engine: %s", engine)
-		}
+// validateDeploymentSpec validates deployment engine specifications
+func (cv *ComponentValidator) validateDeploymentSpec(component *Component) error {
+	if component.Deployment.Engine == "" {
+		return fmt.Errorf("deployment engine is required")
+	}
+	if component.Deployment.Version == "" {
+		return fmt.Errorf("deployment engine version is required")
+	}
+	return nil
+}
 
-		// Validate engine spec
-		if spec.Engine == "" {
-			return fmt.Errorf("engine spec for '%s' is missing engine name", engine)
-		}
-		if spec.Version == "" {
-			return fmt.Errorf("engine spec for '%s' is missing version", engine)
+// validateSemanticVersion validates semantic version format
+func validateSemanticVersion(fl validator.FieldLevel) bool {
+	version := fl.Field().String()
+	_, err := ParseSemanticVersion(version)
+	return err == nil
+}
+
+// validateDNS1123 validates DNS-1123 compliant names
+func validateDNS1123(fl validator.FieldLevel) bool {
+	name := fl.Field().String()
+	if len(name) == 0 || len(name) > 63 {
+		return false
+	}
+
+	// DNS-1123 names must start and end with alphanumeric characters
+	// and can contain hyphens in the middle
+	for i, r := range name {
+		if i == 0 || i == len(name)-1 {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+				return false
+			}
+		} else {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return false
+			}
 		}
 	}
 
-	return nil
+	return true
 }
 
 var (
