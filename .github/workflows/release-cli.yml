@@ -360,7 +360,7 @@ jobs:
 
       - name: Trigger documentation update
         if: needs.validate-release.outputs.is-prerelease == 'false'
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           event-type: cli-release
