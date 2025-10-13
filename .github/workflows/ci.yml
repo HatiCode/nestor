@@ -580,7 +580,7 @@ jobs:
           args: "-no-fail -fmt sarif -out gosec.sarif ./..."
 
       - name: Upload Gosec results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: gosec.sarif
@@ -594,7 +594,7 @@ jobs:
           output: "trivy.sarif"
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy.sarif"
